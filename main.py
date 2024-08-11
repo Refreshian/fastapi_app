@@ -1,6 +1,9 @@
 import ast
+import asyncio
 from datetime import datetime
 from enum import Enum
+import glob
+import itertools
 import re
 import shutil
 from typing import List, Optional, Union
@@ -9,6 +12,7 @@ import time
 from os import listdir
 from os.path import isfile, join
 import tensorflow_hub as hub
+from starlette.responses import FileResponse
 
 import aiofiles
 from sklearn import manifold
@@ -19,7 +23,7 @@ from collections import Counter
 from sklearn.feature_extraction.text import CountVectorizer
 from sklearn.metrics.pairwise import cosine_similarity
 
-from fastapi import FastAPI, File, Request, UploadFile, status, Depends
+from fastapi import FastAPI, File, Request, UploadFile, logger, status, Depends
 from fastapi.encoders import jsonable_encoder
 # from fastapi.exceptions import ValidationError
 from fastapi.responses import JSONResponse
@@ -52,6 +56,9 @@ from operator import itemgetter
 from transformers import AutoTokenizer, pipeline
 import torch
 
+import redis
+redis_db = redis.StrictRedis(host="localhost", port=6379, db=0, decode_responses=True)
+
 es = Elasticsearch(
     ['localhost'],
     port=9200
@@ -70,6 +77,10 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+# db
+
+
 
 # load LLM
 os.chdir('/home/dev/fastapi/analytics_app/data/LLM_models/')
@@ -256,6 +267,7 @@ class MediaRatingModel(BaseModel):
 
 class ModelItemAIAnalyticsNone(BaseModel):
     id: int
+    timeCreate: int
     text: str
     hub: str
     audienceCount: int
@@ -286,6 +298,63 @@ class QueryAiLLM(BaseModel):
     promt: str = None
     texts_ids: list[int] = None
 
+
+### Model Competitors
+class QueryCompetitors(BaseModel):
+    themes_ind: list[int]=None
+    min_date: int=None
+    max_date: int=None
+
+
+class FirstGraphValue(BaseModel):
+    timestamp: int
+    count: int
+
+
+class FirstGraphCompetitors(BaseModel):
+    index_name: str
+    values: List[FirstGraphValue]
+
+
+class SocmediaCompetitors(BaseModel):
+    name: str
+    count: int
+    rating: int
+
+
+class SecondGraphCompetitors(BaseModel):
+    index_name: str
+    SMI: List
+    Socmedia: List[SocmediaCompetitors]
+
+
+class SocmediaThirdGraphCompetitors(BaseModel):
+    date: int
+    name: str
+    rating: int
+    url: str
+
+
+class ThirdGraphCompetitors(BaseModel):
+    index_name: str
+    SMI: List
+    Socmedia: List[SocmediaThirdGraphCompetitors]
+
+
+class CompetitorsModel(BaseModel):
+    first_graph: List[FirstGraphCompetitors]
+    second_graph: List[SecondGraphCompetitors]
+    third_graph: List[ThirdGraphCompetitors]
+
+
+class DataFolder(BaseModel):
+    name: str
+    values: List[str]
+
+
+class ModelDataFolder(BaseModel):
+    values: List[DataFolder]
+
 ###=====###
 
 app.include_router(
@@ -307,7 +376,8 @@ indexes = {1: "rosbank_01.02.2024-07.02.2024", 2: "skillfactory_zaprosy_na_obuch
            7: "monitoring_tem_19.03.2024-25.03.2024", 8: 'rosbank_26.03.2024-01.04.2024', 9: 'tehfob', 10: 'transport_01.01.2024-09.04.2024', 
            11: 'moskovskiy_transport_01.01.2024_09.04.2024_2b', 12: 'rosbank_01.04.2024-15.04.2024', 13: 'rosbank_14.05.2024-16.05_чистая прибыль',
            14: 'contented_smi_01.04.2024-26.05.2024', 15: 'skillbox_smi_01.04.2024-26.05.2024', 16: 'rb_smi', 17: 'geekbrains', 18: 'eduson', 
-           19: 'maley_nlmk_boevaya_tema_17.06.2024-21.06.2024_66757eb24cb15033866ecdd8', 20: 'maley_nlmk_boevaya_tema_17_06_2024_21_06_2024'}
+           19: 'maley_nlmk_boevaya_tema_17.06.2024-21.06.2024_66757eb24cb15033866ecdd8', 20: 'maley_nlmk_boevaya_tema_17_06_2024_21_06_2024',
+           21: 'platon_test_31.07.2024-06.08.2024', 22: 'platon_test'}
 
  
 @app.get('/data-users')
@@ -774,14 +844,16 @@ async def themes_analize(user: User = Depends(current_user), index: int =None,
     
     os.chdir('/home/dev/fastapi/analytics_app/files')
     # данные с описанием тематик
-    filename = indexes[index] + '_LLM'
+    # filename = indexes[index] + '_LLM'
+    os.chdir('/home/dev/fastapi/analytics_app/files/Росбанк/')
+    filename = 'rosbank_01.04.2024-15.04.2024_LLM'
     with open (filename, 'rb') as fp:
         data = pickle.load(fp)
 
     print(data[:2])
 
     data = [x[0]['generated_text'].split('model\n')[1] if len(x) == 1 else x for x in data]
-    data = pd.DataFrame(data[:2])
+    data = pd.DataFrame(data) 
 
     # print(data)
 
@@ -830,8 +902,6 @@ async def themes_analize(user: User = Depends(current_user), index: int =None,
     df_res.drop('index', axis=1, inplace=True)
 
     data = df_res[[0]]
-
-    print(data)
 
     # функция для удаления лишних символов в текстах
     import re
@@ -902,7 +972,7 @@ async def themes_analize(user: User = Depends(current_user), index: int =None,
             a['audience'] = str(np.sum([x['audienceCount'] for x in df_res.iloc[fin_dict[list(fin_dict.keys())[i]]].to_dict(orient='records') if x['audienceCount'] != ''])) # количество аудитории в тематике
             a['er'] = str(np.sum([x['er'] for x in df_res.iloc[fin_dict[list(fin_dict.keys())[i]]].to_dict(orient='records') if x['er'] != ''])) # количество вовлеченности в тематику
             a['viewsCount'] = str(np.sum([x['viewsCount'] for x in df_res.iloc[fin_dict[list(fin_dict.keys())[i]]].to_dict(orient='records') if x['viewsCount'] != '']))# количество просмотров в тематике
-            a['texts'] = 'texts'
+            a['texts'] = 'texts' 
             # texts.append(df_res[df_res.index.isin(fin_dict[list(fin_dict.keys())[i]])].to_dict(orient='records'))
             fin_data.append(a)
             
@@ -917,8 +987,6 @@ async def themes_analize(user: User = Depends(current_user), index: int =None,
             a['texts'] = 'texts'
             # texts.append(df_res.iloc[[list(fin_dict.keys())[i]]].to_dict(orient='records'))
             fin_data.append(a)
-
-    print('ThemesModel')
   
     return ThemesModel(values=fin_data)
 
@@ -1387,7 +1455,7 @@ async def ai_analytics_get(index: int=None, min_date: int=None, max_date: int=No
 
     # отфильтровываем по необходимой дате из календаря
     data = [x for x in data if min_date <= x['timeCreate'] <= max_date]
-    keys = ['id', 'text', 'hub', 'audienceCount', 'commentsCount', 'er', 'url'] # ключи для отображения в первой таблице
+    keys = ['id', 'timeCreate', 'text', 'hub', 'audienceCount', 'commentsCount', 'er', 'url'] # ключи для отображения в первой таблице
     data = [{k: y.get(k, None) for k in keys} for y in data[:100]] # данные для первой таблицы
     ranges = list(np.arange(0, len(data)))
     [x.update({'id': y.item()}) for x, y in zip(data, ranges)] # меняем значение id на 0,1,2...для передачи далее при выборе на LLM
@@ -1395,30 +1463,23 @@ async def ai_analytics_get(index: int=None, min_date: int=None, max_date: int=No
     return ModelAIAnalyticsNone(data=data)
 
 
-@app.post('/ai-analytics')
-async def ai_analytics_post(query: QueryAiLLM) -> ModelAIAnalyticsPost:
-
-    st = time.time()
-
-    # делаем запрос на текстовый поиск
-    data = elastic_query(theme_index=indexes[query.index], query_str='all')
-    # отфильтровываем по необходимой дате из календаря
-    data = [x for x in data if query.min_date <= x['timeCreate'] <= query.max_date]
-    
-    # если был введен промт и выбраны строчки текстов (индексты в таблице данных), то начать запрос к LLM
-    # query.promt = "Какая тематика у этого текста? Текст: "
-    data = [data[x] for x in query.texts_ids]
+async def create_llm_query(data, query, task_id, text_ids):
 
     LLM = {} # данные для возврата вида {'text': 'описание'}
-    LLM['promt'] = query.promt
+    LLM['promt'] = query
     LLM['texts'] = []
 
-    # print(query.promt)
-    # print(data)
-    
+    print(task_id)
+    print(redis_db[task_id], "step")
+    print(len(data))
+
     for i in range(len(data)): # цикл работы LLM с выбранными текстами
+        st = time.time()      
+
+        print(int(((i + 1) / len(data)*100)))
+
         messages = [
-            {"role": "user", "content": query.promt + data[i]['text']},
+            {"role": "user", "content": query + data[i]['text']},
         ]
         prompt = pipeline.tokenizer.apply_chat_template(messages, tokenize=False, add_generation_prompt=True)
         outputs = pipeline(
@@ -1430,17 +1491,49 @@ async def ai_analytics_post(query: QueryAiLLM) -> ModelAIAnalyticsPost:
             top_p=0.95,
             batch_size=128 
         )
-        LLM['texts'].append({'id': query.texts_ids[i], 'text': data[i]['text'], 
+        LLM['texts'].append({'id':text_ids[i], 'text': data[i]['text'], 
                                 'llm_text': outputs[0]['generated_text'].split('model\n')[1]})
 
-    print('Done!')
-    print(LLM['texts'])
+        redis_db[task_id] = int(((i + 1) / len(data)*100))
 
-    # get the end time
-    et = time.time()
-    # get the execution time
-    elapsed_time = et - st
-    print('Execution time:', elapsed_time, 'seconds')
+        # get the execution time
+        et = time.time()
+        elapsed_time = et - st
+        print(elapsed_time)
+        print('Execution time:', elapsed_time, 'seconds')
+    
+
+@app.post('/ai-analytics')
+async def ai_analytics_post(query: QueryAiLLM):
+
+    # делаем запрос на текстовый поиск
+    data = elastic_query(theme_index=indexes[query.index], query_str='all')
+    # отфильтровываем по необходимой дате из календаря
+    data = [x for x in data if query.min_date <= x['timeCreate'] <= query.max_date]
+    
+    # если был введен промт и выбраны строчки текстов (индексты в таблице данных), то начать запрос к LLM
+    # query.promt = "Какая тематика у этого текста? Текст: "
+    data = [data[x] for x in query.texts_ids]
+
+    print(query.texts_ids)
+    print(query.promt)
+    # print(data)
+    task_id = "llm_task" + '_' + str(len(redis_db.keys()))
+
+    redis_db.mset({task_id: 0})
+
+    task = asyncio.create_task(
+        create_llm_query(data, query.promt, task_id, query.texts_ids)
+    )
+
+    await task
+
+    return {'body': {'message': 'success'}}
+    
+    # return {
+    #     "promt": query.promt, 
+    #     "texts": LLM['texts']
+    # }
 
     # ans = {
     #     "promt": "Какая тематика у этого текста? Текст: ",
@@ -1457,56 +1550,21 @@ async def ai_analytics_post(query: QueryAiLLM) -> ModelAIAnalyticsPost:
     #         }
     #     ]
     #     }
-    # return ans
-    return ModelAIAnalyticsPost(promt=LLM['promt'], texts=LLM['texts'])
-
-### Model Competitors
-class QueryCompetitors(BaseModel):
-    themes_ind: list[int]=None
-    min_date: int=None
-    max_date: int=None
 
 
-class FirstGraphValue(BaseModel):
-    timestamp: int
-    count: int
 
+    # # get the end time
+    # et = time.time()
+    # # get the execution time
+    # elapsed_time = et - st
+    # print('Execution time:', elapsed_time, 'seconds')
 
-class FirstGraphCompetitors(BaseModel):
-    index_name: str
-    values: List[FirstGraphValue]
+    # return {
+    #     "promt": query.promt, 
+    #     "texts": LLM['texts']
+    # }
 
-
-class SocmediaCompetitors(BaseModel):
-    name: str
-    count: int
-    rating: int
-
-
-class SecondGraphCompetitors(BaseModel):
-    index_name: str
-    SMI: List
-    Socmedia: List[SocmediaCompetitors]
-
-
-class SocmediaThirdGraphCompetitors(BaseModel):
-    date: int
-    name: str
-    rating: int
-    url: str
-
-
-class ThirdGraphCompetitors(BaseModel):
-    index_name: str
-    SMI: List
-    Socmedia: List[SocmediaThirdGraphCompetitors]
-
-
-class CompetitorsModel(BaseModel):
-    first_graph: List[FirstGraphCompetitors]
-    second_graph: List[SecondGraphCompetitors]
-    third_graph: List[ThirdGraphCompetitors]
-
+    # return ModelAIAnalyticsPost(promt=LLM['promt'], texts=LLM['texts'])
 
 
 @app.post('/competitors')
@@ -2457,14 +2515,6 @@ async def competitors(query: QueryCompetitors) -> CompetitorsModel:
     return CompetitorsModel(first_graph=first_graph, second_graph=second_graph, third_graph=third_graph)
 
 
-class DataFolder(BaseModel):
-    name: str
-    values: List[str]
-
-
-class ModelDataFolder(BaseModel):
-    values: List[DataFolder]
-
 @app.get('/data-folders')
 async def data_folders(user: User = Depends(current_user)) -> ModelDataFolder:
 
@@ -2509,16 +2559,47 @@ async def create_folder(user: User = Depends(current_user), name: str = None):
 
 # удаление файла или папки из сервиса
 @app.get('/data-delete')
-async def data_delete(folder_name: str = None, file_name: str = None):
-    os.chdir('/home/dev/fastapi/analytics_app/data/json_files')
-    if folder_name != None and file_name == None: # удаление папки
-        shutil.rmtree('/home/dev/fastapi/analytics_app/data/json_files/' + folder_name, ignore_errors=True)
+async def data_delete(folder_name: str = None, file_name: str = None, base_files: bool = None):
+
+    json_files = {'json_files': []}
+    projector_files = {'projector_files': []}
+
+    def list_files_json(pattern='/home/dev/fastapi/analytics_app/data/json_files/**/*', recursive=True):
+        files = glob.glob(pattern, recursive=recursive)
+        for file in files:
+            json_files['json_files'].append(file.split("/")[-1])
+
+    def list_files_projector(pattern='/home/dev/fastapi/analytics_app/data/projector_files/**/*', recursive=True):
+        files = glob.glob(pattern, recursive=recursive)
+        for file in files:
+            projector_files['projector_files'].append(file.split("/")[-1])
+
+    list_files_json()
+    list_files_projector()
+
+    if file_name is None and base_files == True: # если для удаления папки мы находимся в директории файлов базы (json):
+        os.chdir('/home/dev/fastapi/analytics_app/data/json_files')
+        if folder_name != None and file_name == None: # удаление папки
+            shutil.rmtree('/home/dev/fastapi/analytics_app/data/json_files/' + folder_name, ignore_errors=True)
+            return f'Папка {folder_name} удалена!'
+        
+    elif file_name is None and base_files == False:
+        data_folders = '/home/dev/fastapi/analytics_app/data/projector_files/'
+        shutil.rmtree('/home/dev/fastapi/analytics_app/data/projector_files/' + folder_name, ignore_errors=True)
         return f'Папка {folder_name} удалена!'
+           
+    elif file_name not in list(itertools.chain(*list(projector_files.values()))):
+        if folder_name != None and file_name != None: # удаление файла
+            os.remove('/home/dev/fastapi/analytics_app/data/json_files/' + folder_name + 
+                    '/' + file_name)
+            return f'Файл {file_name} удален!'
     
-    if folder_name != None and file_name != None: # удаление файла
-        os.remove('/home/dev/fastapi/analytics_app/data/json_files/' + folder_name + 
-                  '/' + file_name)
-        return f'Файл {file_name} удален!'
+    else:       
+        if folder_name != None and file_name != None: # удаление файла
+            os.remove('/home/dev/fastapi/analytics_app/data/projector_files/' + folder_name + 
+                    '/' + file_name)
+            return f'Файл {file_name} удален!'
+
 
 @app.get('/file-rename')
 async def rename(folder_name: str, current_file_name: str, new_file_name: str):
@@ -2527,13 +2608,15 @@ async def rename(folder_name: str, current_file_name: str, new_file_name: str):
     return f'Файл {current_file_name} переименован в {new_file_name}'
 
 
-@app.post("/upload-file/")
-async def create_upload_file(uploaded_file: UploadFile = File(...), folder_name: str = None):    
+@app.post("/upload-file/") # загрузка файла json
+def create_upload_file(uploaded_file: UploadFile = File(...), folder_name: str = None):    
     file_location = '/home/dev/fastapi/analytics_app/data/json_files/' + folder_name + '/' + str(uploaded_file.filename)
     with open(file_location, "wb+") as file_object:
         shutil.copyfileobj(uploaded_file.file, file_object)
+
+    load_file_to_elstic(uploaded_file, path='/home/dev/fastapi/analytics_app/data/json_files/' + folder_name)
         
-    return {"info": f"file '{uploaded_file.filename}' сохранен в папку '{folder_name}'"}
+    return {"info": f"Файл '{uploaded_file.filename}' сохранен в папку '{folder_name}'"}
 
 
 @app.get("/create-data-projector")
@@ -2712,11 +2795,11 @@ async def create_data_projector(folder_name: str, file_name: str):
     #         f.write(f"{line}\n")
 
     os.chdir(path_project_data + folder_name)
-    with open(file_name.replace('.json', '_author_point.tsv'), 'w') as f:
+    with open(file_name.replace('.json', '_author_point_' + datetime.now().strftime("%Y-%m-%d-%H-%M-%S") + '.tsv'), 'w') as f:
         for line in tsv_embed_list:
             f.write(f"{line}\n")
     test_names = names_list
-    with open(file_name.replace('.json', '_author_name.txt'), 'w', encoding="utf-8") as f:
+    with open(file_name.replace('.json', '_author_name_' + datetime.now().strftime("%Y-%m-%d-%H-%M-%S") + '.txt'), 'w', encoding="utf-8") as f:
         for line in test_names:
             f.write(f"{line}\n")
 
@@ -2908,6 +2991,103 @@ async def create_data_projector(folder_name: str, file_name: str):
 
     # del dict_tsne
     return f'yes'
+
+
+@app.get("/projector-files")
+async def projector_files() -> ModelDataFolder:
+
+    folders = '/home/dev/fastapi/analytics_app/data/projector_files'
+    sub_folders = [name for name in os.listdir(folders) if os.path.isdir(os.path.join(folders, name))]
+
+    data_values = []
+    os.chdir(folders)
+    for i in range(len(sub_folders)):
+        data_values.append({"name": sub_folders[i], 
+                            "values": [f for f in listdir(sub_folders[i]) if isfile(join(sub_folders[i], f))]}) 
+    
+    return ModelDataFolder(values=data_values)
+
+
+@app.get('/file-load/')
+def load_file(folder_name: str, file_name: str):
+
+    json_files = {'json_files': []}
+    projector_files = {'projector_files': []}
+
+    def list_files_json(pattern='/home/dev/fastapi/analytics_app/data/json_files/**/*', recursive=True):
+        files = glob.glob(pattern, recursive=recursive)
+        for file in files:
+            json_files['json_files'].append(file.split("/")[-1])
+
+    def list_files_projector(pattern='/home/dev/fastapi/analytics_app/data/projector_files/**/*', recursive=True):
+        files = glob.glob(pattern, recursive=recursive)
+        for file in files:
+            projector_files['projector_files'].append(file.split("/")[-1])
+
+    list_files_json()
+    list_files_projector()
+
+    if file_name not in list(itertools.chain(*list(projector_files.values()))):
+        data_folders = '/home/dev/fastapi/analytics_app/data/' + 'json_files/' + folder_name + '/'
+        file_path = data_folders + file_name
+    else:
+        data_folders = '/home/dev/fastapi/analytics_app/data/' + 'projector_files/'  + folder_name + '/'
+        file_path = data_folders + file_name
+
+    print(folder_name)
+    return FileResponse(file_path, media_type='application/octet-stream', filename=file_name)    
+
+
+# @app.get('/load-folder')
+# async def load_folder(folder_name: str, type_folder: str = None):
+
+#     json_folders = [name for name in os.listdir('/home/dev/fastapi/analytics_app/data/json_files/') if os.path.isdir(os.path.join('/home/dev/fastapi/analytics_app/data/json_files/', name))]
+#     projector_folders = [name for name in os.listdir('/home/dev/fastapi/analytics_app/data/projector_files/') if os.path.isdir(os.path.join('/home/dev/fastapi/analytics_app/data/projector_files/', name))]
+
+#     print(json_folders)
+#     print(projector_folders)
+#     return f'yes'
+
+
+
+# @app.post("/uploadfiles/")
+# async def create_upload_files(timesec: int):
+#     task_id = "llm_task" + '_' + str(len(redis_db.keys()))
+#     print(task_id)
+#     redis_db.mset({task_id: 0})
+
+    # for i in range(timesec):
+    #     await asyncio.sleep(2)
+    #     redis_db[task_id] = i
+
+
+@app.get("/progress/{task_id}/")
+async def get_upload_progress(task_id: str):
+    return redis_db[task_id]
+
+
+
+async def slow_request(timesec: int):
+
+    for i in range(timesec):
+        await asyncio.sleep(2)
+        redis_db['llm_task_38'] = i
+
+    if not redis_db['llm_task_38']:
+        logger.error('data', timesec)
+
+
+@app.post('/order/')
+async def handle_order(timesec: int = None):
+    json_data = timesec
+    
+    task = asyncio.create_task(
+        slow_request(json_data)
+    )
+    await task
+
+    return {'body': {'message': 'success'}}
+
 
 if __name__ == "__main__":
     uvicorn.run("main:app", host="194.146.113.124", port=8005, reload=True)
