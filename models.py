@@ -2,8 +2,19 @@ from datetime import datetime
 
 from sqlalchemy import MetaData, Table, Column, Integer, String, TIMESTAMP, ForeignKey, JSON, Boolean
 from sqlalchemy import *
+from sqlalchemy.ext.declarative import declarative_base
 
 metadata = MetaData()
+
+# conn_string = "host='localhost' dbname='app_ind' user='user' password='postgres'"
+engine = create_engine('postgresql+asyncpg://postgres:ffsfds&fdv12w@localhost:5432/datadb')
+Base = declarative_base()
+
+from sqlalchemy import (
+    Column,
+    Integer,
+    String,
+)
 
 role = Table(
     "role",
@@ -27,3 +38,6 @@ user = Table(
     Column("is_verified", Boolean, default=False, nullable=False),
     Column("theme_rules", JSON),
 )
+
+if __name__ == "__main__":
+    Base.metadata.create_all(engine)

@@ -1,6 +1,10 @@
 from dotenv import load_dotenv
 import os
 
+
+print('DB_NAME' in os.environ)
+
+
 load_dotenv()
 
 DB_HOST = os.environ.get("DB_HOST")

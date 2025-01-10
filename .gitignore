@@ -66,3 +66,17 @@ docs/_build/
 /data
 variables/variables.data-00000-of-00001
 .variables/variables.data-00000-of-00001
+
+bin/
+data/
+etc/
+files/
+include/
+lib64/
+share/
+*.env
+test*.py
+**/__pycache__/
+*.pyc
+*.pyo
+*.so

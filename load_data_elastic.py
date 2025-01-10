@@ -6,7 +6,7 @@ import sys, json, os
 
 
 es = Elasticsearch(
-    ['194.146.113.124'],
+    ['194.146.113.123'],
     port=9200
 )
 
@@ -14,7 +14,7 @@ es = Elasticsearch(
 es_indexes = [index for index in es.indices.get('*')]
 # es.indices.delete(index='read_me', ignore=[400, 404])
 
-def load_file_to_elstic(filename, path=None):
+def load_file_to_elstic(filename, path=None, next_key=None):
     
     mapping = {
         "mappings": {
@@ -50,13 +50,13 @@ def load_file_to_elstic(filename, path=None):
         if response['acknowledged'] == True:
             print("INDEX MAPPING SUCCESS FOR INDEX:", response['index'])
 
-    # catch API error response
-    elif 'error' in response:
-        print("ERROR:", response['error']['root_cause'])
-        print("TYPE:", response['error']['type'])
+    # # catch API error response
+    # elif 'error' in response:
+    #     print("ERROR:", response['error']['root_cause'])
+    #     print("TYPE:", response['error']['type'])
 
-    # print out the response:
-    print ('\nresponse:', response)
+    # # print out the response:
+    # print ('\nresponse:', response)
 
     # Elastic configuration.
     ELASTIC_ADDRESS = "http://localhost:9200"
@@ -67,7 +67,7 @@ def load_file_to_elstic(filename, path=None):
 
         index = 0
         # Open the file containing the JSON data to index.
-        with open(documents_filename.filename, "r") as json_file:
+        with open(documents_filename.filename.lower(), "r") as json_file:
             json_data = json.load(json_file)
             # проставляем [] в geoObject для корректной загрузки в es
             for i in range(len(json_data)):

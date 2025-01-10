@@ -6,6 +6,10 @@ es = Elasticsearch(
     port=9200
 )
 
+es.indices.put_settings(index="cennosti_data_year_without_doubles",
+                        body= {"index" : {
+                                "max_result_window" : 2000000
+                              }})
 
 def elastic_query(theme_index: str, query_str: str):
         
@@ -115,3 +119,22 @@ def elastic_query(theme_index: str, query_str: str):
         
         return data
 
+
+
+
+# indexes = {1: "rosbank_01.02.2024-07.02.2024", 2: "skillfactory_zaprosy_na_obuchenie_15.01.2024-21.01.2024", 3:'rosbank_19.02.2024-29.02.2024', 
+#            4: "rosbank_14.03.2024-14.03.2024_fullday", 5: "r_13.03.2024-14.03.2024_full", 6: "rosbank_22.03.2024-24.03.2024", 
+#            7: "monitoring_tem_19.03.2024-25.03.2024", 8: 'rosbank_26.03.2024-01.04.2024', 9: 'tehfob', 10: 'transport_01.01.2024-09.04.2024', 
+#            11: 'moskovskiy_transport_01.01.2024_09.04.2024_2b', 12: 'rosbank_01.04.2024-15.04.2024', 13: 'rosbank_14.05.2024-16.05_чистая прибыль',
+#            14: 'contented_smi_01.04.2024-26.05.2024', 15: 'skillbox_smi_01.04.2024-26.05.2024', 16: 'rb_smi', 17: 'geekbrains', 18: 'eduson', 
+#            19: 'maley_nlmk_boevaya_tema_17.06.2024-21.06.2024_66757eb24cb15033866ecdd8', 20: 'maley_nlmk_boevaya_tema_17_06_2024_21_06_2024',
+#            21: 'platon_test_31.07.2024-06.08.2024', 22: 'platon_test', 23: 'avtomobili_01.09.2023-02.09.2024', 24: 'cennosti_01.08.2024-31.08.2024'}
+
+# es.indices.put_settings(index="cennosti_01.08.2024-31.08.2024",
+#                         body= {"index" : {
+#                                 "max_result_window" : 500000
+#                               }})
+
+# data = elastic_query(theme_index=indexes[24], query_str='all')
+# texts = [x['text'] for x in data]
+# print(len(texts))
