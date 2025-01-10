@@ -2443,33 +2443,79 @@ async def run_llm_query(request: AnalysisRequest, task_key: str, indexes):
 
     # Определяем общее количество текстов для завершения
     total_texts = len(texts)
-
+    llm_answer = []
+    completed_texts = 0
     count = 0
+
+    # Проверка схожести текстов: Для каждого текстового элемента проверяем, был ли он уже обработан. Если текст схож с ранее обработанными текстами (с использованием порога threshold), мы просто возвращаем кэшированный ответ.
+    # Кэширование результатов: Для каждого проанализированного текста сохраняем результат в словаре processed_texts. Таким образом, если текст встречается повторно или если его похожесть превышает определенный порог, мы можем избежать повторного анализа.
+    # Устранение повторных вычислений: Используем CountVectorizer и cosine_similarity, чтобы вычислить схожесть между новыми и существующими текстами, избегая необходимости в повторном запуске тяжелых вычислений, если текст уже был проанализирован.
+    # Обновление прогресса: Прогресс обновляется после каждой итерации, чтобы показать статус обработки.
+    
+    # Словарь для хранения уже обработанных текстов и их тематик
+    processed_texts = {}
+
+    # Проверка схожести текстов
+    def check_similarity_and_process(single_text, threshold=0.8):
+        if single_text in processed_texts:
+            return processed_texts[single_text]  # Возвращаем кэшированный ответ
+
+        # Формируем DataFrame для анализа
+        df_meta = pd.DataFrame({'text': [single_text]})
+        
+        # Проверка на существующие тексты
+        if len(processed_texts) > 0:
+            df_existing = pd.DataFrame(list(processed_texts.keys()), columns=['text'])
+            combined_df = pd.concat([df_meta, df_existing], ignore_index=True)
+
+            count_vectorizer = CountVectorizer()
+            vector_matrix = count_vectorizer.fit_transform(combined_df['text'].values)
+            cosine_similarity_matrix = cosine_similarity(vector_matrix)
+
+            # Убираем диагональные элементы
+            for i in range(len(cosine_similarity_matrix)):
+                cosine_similarity_matrix[i][i] = 0
+
+            # Проверяем на схожесть
+            similar_indices = np.where(cosine_similarity_matrix[0] >= threshold)[0]
+            if len(similar_indices) > 0:
+                print('threshold сработал!')
+                # Если есть похожие тексты, берем ответ от первого найденного
+                return processed_texts[combined_df.iloc[similar_indices[0]]['text']]
+
+        # Здесь выполняем анализ текста
+        messages = [
+            {
+                "role": "system", 
+                "content": request.system_prompt + request.example_promt + 
+                'У меня есть следующий текст: ' + single_text + 
+                ' Основываясь на информации о ключевых словах выше, пожалуйста, выпишите тематики этого текста. Убедитесь, что вы возвращаете только тематики и ничего больше. Отвечайте на русском языке.'
+            }
+        ]
+
+        # Очищаем кэш перед вызовом модели
+        torch.cuda.empty_cache()
+
+        # Используем torch.no_grad() для предотвращения вычисления градиентов
+        with torch.no_grad():
+            response = pipe(messages, num_return_sequences=1)
+
+        # Обрабатываем ответ
+        result_text = response[0]['generated_text'][1]['content'].replace('[/INST]\n', '').replace('\n', '')
+
+        # Кэшируем результат
+        processed_texts[single_text] = result_text
+        return result_text
+
     # Проходим через каждый текст по отдельности
     for i in range(total_texts):
         single_text = texts[i]
 
         if len(single_text) < 15000:
-            # Формируем сообщения
-            messages = [
-                {"role": "system", "content": request.system_prompt + request.example_promt + 
-                'У меня есть следующий текст: ' + single_text + 
-                ' Основываясь на информации о ключевых словах выше, пожалуйста, выпишите тематики этого текста. Убедитесь, что вы возвращаете только тематики и ничего больше. Отвечайте на русском языке.'}
-            ]
-
-            # Очищаем кэш перед вызовом модели
-            torch.cuda.empty_cache()
-
-            # Используем torch.no_grad() для предотвращения вычисления градиентов
-            with torch.no_grad():
-                response = pipe(messages, num_return_sequences=1)
-
-            # Обрабатываем ответ
-            llm_answer.append(response[0]['generated_text'][1]['content'].replace('[/INST]\n', '').replace('\n', ''))
-
+            answer = check_similarity_and_process(single_text)
+            llm_answer.append(answer)
         else:
             llm_answer.append('Длинный текст')
-            # Обновление прогресса в случае длины текста
             count += 1
 
         # Обновление прогресса
