@@ -3096,17 +3096,13 @@ async def delete_file(user_id: str, directory_type: str, directory_name: str, fi
             search_string = file_name.replace('.txt', '').replace('.tsv', '')
             # Удаляем соответствующий словарь
             if directory_name in folders.get("projector_files_directory", {}):
-                print(folders.get("projector_files_directory", {}))
-                print(333555666)
                 schools_data = folders["projector_files_directory"]
-                print(schools_data)
                 # Ищем и удаляем словарь с необходимими файлами
                 updated_schools = [
                     entry for entry in schools_data[directory_name]
                     if not (search_string in entry.get('tsv-file', '') or 
                             search_string in entry.get('txt-file', ''))
                 ]
-                print(updated_schools)
                 schools_data[directory_name] = updated_schools
                 redis_db.hset(user_id, "projector_files_directory", json.dumps(schools_data))
 

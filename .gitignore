@@ -1,6 +1,4 @@
-# find ./* -size +100M | cat >> .gitignore
-# data/universal-sentence-encoder-multilingual_3/variables/variables.data-00000-of-00001
-# Byte-compiled / optimized / DLL files
+# Игнорирование временных и компилированных файлов
 __pycache__/
 *.py[cod]
 
@@ -24,27 +22,27 @@ var/
 *.egg
 package-lock.json
 package.json
+
+# Игнорирование специфических файлов
 test2.py
 test.py
-node_modules/
-2.0.0rc0
-.data
-/data
-data
-stash
+bertopic2.py
+bertopic_test_keys.py
+pyvenv.cfg
+pyproject.toml
 
-# Installer logs
+# Логи установщиков
 pip-log.txt
 pip-delete-this-directory.txt
 
-# Unit test / coverage reports
+# Отчеты о тестах / покрытиях
 .tox/
 .coverage
 .cache
 nosetests.xml
 coverage.xml
 
-# Translations
+# Переводы
 *.mo
 
 # Mr Developer
@@ -55,27 +53,26 @@ coverage.xml
 # Rope
 .ropeproject
 
-# Django stuff:
+# Django stuff
 *.log
 *.pot
 
 # Sphinx documentation
 docs/_build/
-./data/universal-sentence-encoder-multilingual_3/variables/variables.data-00000-of-00001
-/data/universal-sentence-encoder-multilingual_3/variables/variables.data-00000-of-00001
-/data
-variables/variables.data-00000-of-00001
-.variables/variables.data-00000-of-00001
 
-bin/
+# Папки и файлы, которые нужно игнорировать
+files/
+poetry..
 data/
 etc/
-files/
 include/
-lib64/
 share/
+
+# Игнорирование переменных окружения
 *.env
 test*.py
+
+# Игнорирование других компилируемых файлов
 **/__pycache__/
 *.pyc
 *.pyo
