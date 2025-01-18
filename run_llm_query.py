@@ -1,0 +1,352 @@
+import logging
+import os
+import re
+import time
+import pickle
+import asyncio
+import gc, json
+# import redis
+import torch
+from tqdm import tqdm
+from datetime import datetime
+from transformers import AutoTokenizer, pipeline
+from sentence_transformers import SentenceTransformer
+from sklearn.metrics import silhouette_score
+from umap import UMAP
+from hdbscan import HDBSCAN
+from bertopic import BERTopic
+
+from torch import bfloat16
+import transformers
+from bertopic.representation import KeyBERTInspired, MaximalMarginalRelevance, TextGeneration
+from search_data_elastic import elastic_query
+
+import numpy as np
+from sklearn.preprocessing import StandardScaler
+from sklearn.model_selection import ParameterGrid
+import redis.asyncio as redis
+# Инициализация клиента Redis
+redis_db = redis.Redis(host='localhost', port=6379, db=0)
+
+# загрузка словаря с темами
+def load_dict_from_pickle(file_name):
+    """
+    Загружает словарь из файла Pickle.
+    :param file_name: Имя файла (str), из которого нужно загрузить словарь.
+    :return: Загруженный словарь (dict) или None, если загрузка не удалась.
+    """
+    try:
+        with open(file_name, 'rb') as f:
+            your_dict = pickle.load(f)
+        return your_dict
+    except Exception as e:
+        print(f"Произошла ошибка при загрузке файла: {e}")
+        return None
+
+
+async def run_llm_query(task_data: dict):
+    """Обрабатывает LLM-запрос с обновлением статуса задачи в Redis."""
+    try:
+        await asyncio.sleep(0.01)
+        current_time = datetime.now().strftime('%Y%m%d_%H%M%S')
+        # print(555)        
+        # print(task_data)
+        # Загружаем данные индекса
+        file_path = '/home/dev/fastapi/analytics_app/data/indexes.pkl'
+        indexes = load_dict_from_pickle(file_path)
+
+        # Выполняем запрос к Elasticsearch
+        data = []
+        if task_data['query_str'] and task_data['query_str'] != 'all':
+            search = task_data['query_str'].split(',')
+            for query in search:
+                data.extend(elastic_query(theme_index=indexes[int(task_data['index'])], query_str=query))
+        else:
+            data = elastic_query(theme_index=indexes[int(task_data['index'])], query_str='all')
+
+        # Фильтруем данные по дате
+        task_data['min_date'] = int(task_data['min_date'])
+        task_data['max_date'] = int(task_data['max_date'])
+        data = [x for x in data if task_data['min_date'] <= x['timeCreate'] <= task_data['max_date']]
+
+        # Получаем тексты и ограничиваем их количество
+        et = time.time()
+        texts = [x['text'] for x in data]
+        texts = texts[:1000]  # Ограничение
+        total_texts = len(texts)
+
+        # Обновляем начальный статус задачи в Redis
+        await redis_db.hset(f"task:{task_data['task_id']}", mapping={
+            "status": "in_progress",
+            "total_texts": total_texts,
+            "completed_texts": 0,
+            "progress": 0,
+        })
+
+        # Прогресс обработки текстов
+        for i, text in enumerate(texts, start=1):
+            # Здесь можно подключить реальную обработку текста, вместо просто задержки
+            await asyncio.sleep(0.1)
+
+            # Обновляем прогресс в Redis
+            progress = int((i / total_texts) * 100)
+            await redis_db.hset(f"task:{task_data['task_id']}", mapping={
+                "completed_texts": i,
+                "progress": progress,
+            })
+
+        # Логируем завершение
+        print(f"Обработка завершена для задачи {task_data['task_id']}!")
+
+        ################################### Модель ###################################
+
+        tokenizer = AutoTokenizer.from_pretrained(
+            "/home/dev/fastapi/analytics_app/data/LLM_models/Meta-Llama-3-8B-Instruct"
+        )
+
+        bnb_config = transformers.BitsAndBytesConfig(
+            load_in_4bit=True,  # 4-bit квантование
+            bnb_4bit_quant_type='nf4',  # Normalized float 4
+            bnb_4bit_use_double_quant=True,  # Вторичное квантование
+            bnb_4bit_compute_dtype=bfloat16  # Тип вычислений
+        )
+
+        model = transformers.AutoModelForCausalLM.from_pretrained(
+            "/home/dev/fastapi/analytics_app/data/LLM_models/Meta-Llama-3-8B-Instruct",
+            trust_remote_code=True,
+            quantization_config=bnb_config,
+            device_map='auto',
+        )
+
+        pipe = pipeline(
+            model=model,
+            tokenizer=tokenizer,
+            task='text-generation',
+            temperature=0.1,
+            max_new_tokens=500,
+            repetition_penalty=1.1,
+        )
+        pipe.tokenizer.pad_token_id = pipe.model.config.eos_token_id
+
+        ################################### Промты ###################################
+
+        system_prompt = """
+        <s>[INST] <<SYS>>
+        Ты дружелюбный ассистент для анализа и разметки текстов из социальных медиа. Твоя задача: выделить ключевые слова (до 5 штук) из текста и составить подходящий заголовок. Следуй инструкциям строго. Отвечай только в указанном формате без лишних символов.
+        <</SYS>>
+        """
+
+        llm_labels = []
+        gc.collect()
+        torch.cuda.empty_cache()
+        count_long_texts = 0
+        completed_texts = 0
+
+        # Генерация заголовков
+        for i in tqdm(range(len(texts))):
+            single_text = texts[i]
+
+            if len(single_text) < 15000:
+                await asyncio.sleep(0.01)
+
+                # Формируем промт для каждого текста
+                messages = [
+                    {
+                        "role": "system", 
+                        "content": (
+                            f"{system_prompt}"
+                            f"У меня есть следующий текст:\n"
+                            f"{single_text}\n\n"
+                            "На основе текста выпиши ключевые слова (до 9 слов) и составь краткий заголовок. "
+                            "Возвращай только заголовок текста. Никакого дополнительного текста, только результат."
+                        )
+                    }
+                ]
+
+                # Генерация ответа (с отключенной автообучаемой памятью)
+                with torch.no_grad():
+                    response = pipe(messages, num_return_sequences=1)
+
+                # Добавляем результат в список
+                llm_labels.append(response[0]['generated_text'][1]['content'].replace('[/INST]\n', '').replace('\n', '').replace('[/INST]', ''))
+
+            else:
+                count_long_texts += 1
+                llm_labels.append('Длинный текст')
+
+            # Обновляем прогресс после обработки каждого текста
+            completed_texts += 1
+            progress = round((completed_texts / total_texts) * 100, 1)
+            
+            # Записываем прогресс в Redis
+            await redis_db.hset(f"task:{task_data['task_id']}", mapping={"completed_texts": completed_texts, "progress": progress})
+
+        # Финальное обновление статуса задачи
+        await redis_db.hset(f"task:{task_data['task_id']}", mapping={"status": "done", "completed_texts": total_texts, "progress": 100})
+
+        
+        ################################### BERTopic ###################################
+
+        # Шаг 1 - Очистка данных
+        llm_labels = [re.sub(r"[^\w\s\"«»']", "", label.strip()) for label in llm_labels if label.strip()]
+
+        # Шаг 2 - Генерация эмбедингов
+        embedding_model = SentenceTransformer("DeepPavlov/rubert-base-cased-sentence")
+        embeddings = embedding_model.encode(llm_labels, show_progress_bar=True)
+
+        # Шаг 3 - Снижение размерности UMAP
+        umap_model = UMAP(n_neighbors=15, n_components=5, min_dist=0.0, metric="cosine", random_state=42)
+        embeddings_umap = umap_model.fit_transform(embeddings)
+
+        # Шаг 4 - Кластеризация HDBSCAN
+        hdbscan_model = HDBSCAN(min_cluster_size=15, metric="euclidean", cluster_selection_method="eom", prediction_data=True)
+        hdbscan_model.fit(embeddings_umap)
+
+        # Вывод результатов кластеризации
+        labels = hdbscan_model.labels_
+
+        # Подсчет уникальных значений и их количества
+        unique_labels, counts = np.unique(labels, return_counts=True)
+
+        # Число кластеров (кроме шума `-1`)
+        num_clusters = len(unique_labels) - (1 if -1 in unique_labels else 0)
+
+        # Число шумовых точек
+        if -1 in unique_labels:
+            noise_index = np.where(unique_labels == -1)[0][0]  # Найти индекс метки `-1` в unique_labels
+            num_noise_points = counts[noise_index]
+        else:
+            num_noise_points = 0
+        # Шаг 5 - Тематическое моделирование BERTopic
+        topic_model = BERTopic(embedding_model=embedding_model, verbose=True)
+        topics, probs = topic_model.fit_transform(llm_labels, embeddings)
+
+        # Шаг 6 - Генерация заголовков тем
+        topic_labels = topic_model.generate_topic_labels(nr_words=6)  # Например, по 3 ключевых слова на тему
+        for i, label in enumerate(topic_labels):
+            print(f"Тема {i}: {label}")
+
+        pipe = pipeline(
+            model=model,
+            tokenizer=tokenizer,
+            task='text-generation',
+            temperature=0.6,
+            max_new_tokens=50,
+            repetition_penalty=1.1,
+        )
+        pipe.tokenizer.pad_token_id = pipe.model.config.eos_token_id
+
+        # Шаг 6 - Генерация заголовков тем
+        topic_labels_llama3 = []
+
+        for i, topic in enumerate(topic_model.get_topics().values()):  # Получаем ключевые слова тем
+            key_words = " | ".join(token[0] for token in topic[:10])  # Берем 5 ключевых слов для темы
+
+            # Формируем сообщения
+            messages = [
+                {"role": "system", "content": f"[INST] Используя данные ключевые слова: {key_words}, сгенерируй на русском языке короткий (не более 5-7 слов) и понятный заголовок для данной темы. Не пиши какие ключевые слова ты использовал (Using keywords), не пиши дополнительных пояснений для заголовка, пиши только сам заголовок на русском языке. [/INST]"}
+            ]
+            
+            # Очищаем кэш перед вызовом модели
+            torch.cuda.empty_cache()
+            
+            # Используем torch.no_grad() для предотвращения вычисления градиентов
+            with torch.no_grad():
+                response = pipe(messages, num_return_sequences=1)
+            
+            # Обрабатываем ответ
+            topic_labels_llama3.append(response[0]['generated_text'][1]['content'].replace('[/INST]\n', '').replace('\n', '').replace('[/INST]', ''))
+
+        topic_model.set_topic_labels(topic_labels_llama3)
+        
+        # Визуализация
+        fig = topic_model.visualize_documents(llm_labels, reduced_embeddings=embeddings_umap, hide_annotations=True, 
+                                        hide_document_hover=False, custom_labels=True)
+
+        # Устанавливаем путь к директории файла
+        file_location = f'/home/dev/fastapi/analytics_app/data/{task_data['user_id']}/bertopic_files_directory/{task_data['folder_name']}/'
+
+        # Создание директории, если она не существует
+        os.makedirs(os.path.dirname(file_location), exist_ok=True)
+
+        # Формируем новое имя файла с добавлением даты и времени
+        new_filename = f"{indexes[int(task_data['index'])]}_{current_time}.html"
+        fig.write_html(file_location + new_filename)
+
+
+        ###################################### save model #################################
+
+        # Название для сохранения файлов
+        filename = 'topic_model_' + new_filename.split('.html')[0]
+
+        st = time.time()
+        elapsed_time = st - et
+        # Получаем целое количество секунд
+        total_seconds = int(elapsed_time)
+
+        # Вычисляем часы
+        hours = total_seconds // 3600
+        # Вычисляем оставшиеся минуты
+        minutes = (total_seconds % 3600) // 60
+        # Вычисляем оставшиеся секунды
+        seconds = total_seconds % 60
+        execution_time =  f"{hours} ч. {minutes} мин. {seconds} сек."
+
+        # Теперь сохраняем темы
+        try:
+            os.chdir(file_location)
+            topic_model.save(filename, serialization="safetensors", save_ctfidf=True, save_embedding_model=embedding_model)
+
+            print(f"Модель успешно сохранена в: {file_location }")
+        except Exception as e:
+            print(f"Ошибка при сохранении модели: {e}")
+
+        # Получение и обработка данных пользователя
+        user_data = await redis_db.execute_command('HGETALL', task_data['user_id'])
+        # Если данные возвращаются в формате 'dict' с байтовыми строками, декодируйте их
+        user_data_decoded = {key.decode('utf-8'): value.decode('utf-8') for key, value in user_data.items()}
+        print(user_data_decoded)
+        print(11999111)
+
+        if user_data:
+            # user_data_decoded = {key.decode('utf-8'): value.decode('utf-8') for key, value in user_data.items()}
+            
+            # Проверка на наличие 'bertopic_files_directory'
+            if "bertopic_files_directory" in user_data:
+                user_folders = json.loads(user_data["bertopic_files_directory"])
+            else:
+                user_folders = {}
+
+            # Преобразование строки в объект datetime
+            creation_date = datetime.strptime(current_time, "%Y%m%d_%H%M%S")
+
+            # Обработка и сохранение нового результата
+            file_info = {
+                "html-file": f"{indexes[int(task_data['index'])]}_{current_time}.html",
+                "model-file": filename,
+                "creation_date": str(creation_date.strftime("%Y-%m-%d %H:%M:%S")),  # Преобразование в формат строки
+                "execution_time": execution_time,
+                "query_str": task_data['query_str'], 
+                "min_date": task_data['min_date'],
+                "max_date": task_data['max_date'],
+                "index_number": int(task_data['index']),
+                "task_id": task_data['task_id']
+            }
+
+
+            # Сохранение тематик llm_labels
+            os.chdir(file_location)
+            with open(f'my_list_llm_ans_{indexes[int(task_data['index'])]}_{current_time}.pkl', 'wb') as file:
+                pickle.dump(llm_labels, file)
+
+            # Сохранение в Redis
+            await redis_db.hset(task_data['user_id'], "bertopic_files_directory", json.dumps(file_info))
+        else:
+            raise Exception("User data does not exist.")
+
+        return 'Анализ выполнен!'
+    
+    except:
+           logging.error(f"Ошибка в run_llm_query: {e}")
+           # Возможно, обновление статуса задачи на 'failed'
+           await redis_db.hset(f"task:{task_data['task_id']}", mapping={"status": "failed"})

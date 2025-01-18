@@ -20,7 +20,7 @@ import aiofiles
 from sklearn import manifold
 from fastapi_users import fastapi_users, FastAPIUsers
 import pandas as pd
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, validator, ValidationError
 from collections import Counter
 from sklearn.feature_extraction.text import CountVectorizer
 from sklearn.metrics.pairwise import cosine_similarity
@@ -123,7 +123,7 @@ import logging
 # Настройка логирования для записи в файл
 logging.basicConfig(filename='app.log', level=logging.INFO)
 
-import redis
+import redis.asyncio as redis
 # redis_db = redis.StrictRedis(host="localhost", port=6379, db=0, decode_responses=True) # БД  для прогресс-бара с LLM расчетами
 # Инициализация клиента Redis
 redis_db = redis.Redis(host='localhost', port=6379, db=0)
@@ -199,7 +199,7 @@ fastapi_users = FastAPIUsers[User, int](
  
 ### TonalityLandscape Models
 class TonalityValues(BaseModel):
-    negative_count: int 
+    negative_count: int
     positive_count: int
 
 class NegativeHub(BaseModel):
@@ -210,43 +210,29 @@ class PositiveHub(BaseModel):
     name: str
     values: int
 
-
 class ModelAuthorsTonalityLandscape(BaseModel):
     negative_hubs: List[NegativeHub]
     positive_hubs: List[PositiveHub]
-    
 
 class Text(BaseModel):
     text: str
     hub: str
     url: str
-    er: int
-    viewsCount: Union[int, str]
-    region: str
-
-
-class Text(BaseModel):
-    text: str
-    hub: str
-    url: str
-    er: int
-    viewsCount: Union[int, str]
-    region: str
-
+    er: Optional[int]
+    viewsCount: Optional[Union[int, str]]
+    region: Optional[str]
 
 class AuthorDatum(BaseModel):
-    fullname: str
-    url: str
-    author_type: str
-    sex: str
-    age: str
-    count_texts: int
-    texts: List[List[Text]]
-
+    fullname: Optional[str]
+    url: Optional[str]
+    author_type: Optional[str]
+    sex: Optional[str]
+    age: Optional[str]
+    count_texts: Optional[int]
+    texts: List[Text]
 
 class ModeAuthorValues(BaseModel):
     author_data: List[AuthorDatum]
-
 
 class Model_TonalityLandscape(BaseModel):
     tonality_values: TonalityValues
@@ -527,279 +513,216 @@ def load_dict_from_pickle(file_name):
         print(f"Произошла ошибка при загрузке файла: {e}")
         return None
 
- 
-# @app.get('/data-users')
-# async def data_users(): # user: User = Depends(current_user)
 
-#     es_indexes = [index for index in es.indices.get('*')] # список всех индексов elastic
-#     es_indexes = [x.strip() for x in es_indexes]
-
-#     # поиск мин и макс дат в данных/файлах
-#     query = {
-
-#     "aggs": { 
-#         "max_timeCreate": {
-#         "max": {
-#             "field": "timeCreate"
-#         }
-#         },
-#         "min_timeCreate": {
-#         "min": {
-#             "field": "timeCreate"
-#         }
-#         }
-#     },
-#     }
-
-#     # Путь к файлу с темами 
-#     file_path = '/home/dev/fastapi/analytics_app/data/indexes.pkl'
-#     # Загрузка словаря с темами
-#     indexes = load_dict_from_pickle(file_path)
-
-#     data_index = []
-#     for index in es_indexes:
-#         if index == 'read_me':
-#             continue
-#         date_period_query = es.search(index=index, body=query)['aggregations'] # запрос мин и макс дат в индексе
-#         try:
-#             data_index.append(
-#                 { 
-#                     "file": index,
-#                     "min_data": date_period_query['min_timeCreate']['value'],
-#                     "max_data": date_period_query['max_timeCreate']['value'],
-#                     "index_number": list({i for i in indexes if indexes[i]==index})[0]
-#                 }
-#             )
-#         except:
-#             continue
+@app.get("/tonality_landscape")# user: User = Depends(current_user),
+async def tonality_landscape(
     
-#     data_index = sorted(data_index, key=lambda d: d['index_number'])
-#     return {"values": data_index}
-
-
-@app.get("/tonality_landscape")
-async def tonality_landscape(user: User = Depends(current_user), index: int =None, 
-                             min_date: int=None, max_date: int=None) -> Model_TonalityLandscape:
-
-    # Путь к файлу с темами 
+    index: int = None, 
+    min_date: Optional[int] = None,
+    max_date: Optional[int] = None
+) -> Model_TonalityLandscape:
+    # Путь к файлу с темами
     file_path = '/home/dev/fastapi/analytics_app/data/indexes.pkl'
     # Загрузка словаря с темами
     indexes = load_dict_from_pickle(file_path)
 
-    # Путь к файлу с темами 
-    file_path = '/home/dev/fastapi/analytics_app/data/indexes.pkl'
-    # Загрузка словаря с темами
-    indexes = load_dict_from_pickle(file_path)
-    
-    # запрос к данным для по запрашиваемому индексу/теме
-    # https://www.elastic.co/guide/en/elasticsearch/reference/current/query-dsl-range-query.html
+    # Формирование запроса для Elasticsearch
     query = {
-            "size": 10000,
-            "query": {
-                        "range": {
-                            "timeCreate": {      # skillfactory_zaprosy_na_obuchenie_15.01.2024-21.01.2024
-                                "gte": min_date, # 1705329992
-                                "lte": max_date, # 1705848392
-                                "boost": 2.0
-                            }
-                        }
-                    }
+        "size": 10000,
+        "query": {
+            "range": {
+                "timeCreate": {
+                    "gte": min_date,
+                    "lte": max_date,
+                    "boost": 2.0
                 }
-    # print('+++===+++')
-    # print(index)
-    # min_date = 1705329992
-    # max_date = 1705848392
-    # data = es.search(index='skillfactory_zaprosy_na_obuchenie_15.01.2024-21.01.2024', body=query)
+            }
+        }
+    }
+
+    # Выполнение запроса к Elasticsearch
     data = es.search(index=indexes[index], body=query)
     data = data['hits']['hits']
 
-    ### подсчет количества позитива и негатива
+    print(555)
+    print(len(data))
+
+    # Обработка данных: заменяем значения в 'hub', если они соответствуют конкретным условиям 
+    for entry in data:
+        if '_source' in entry and 'hub' in entry['_source']:
+            hub = entry['_source']['hub']
+            if hub == 'telegram.org':
+                entry['_source']['hub'] = 'telegram.me'
+            elif hub == 'maps.yandex.ru':
+                entry['_source']['hub'] = 'yandex.ru'
+
+    # Подсчет количества позитивных и негативных тональностей
     pos = [x['_source']['toneMark'] for x in data if x['_source']['toneMark'] == 1]
     neg = [x['_source']['toneMark'] for x in data if x['_source']['toneMark'] == -1]
 
-    ### подсчет источников
-    # негатив
+    # Подсчет источников (hub)
     neg_hub = [x['_source']['hub'] for x in data if x['_source']['toneMark'] == -1]
-    dct_neg_hub = dict(Counter(neg_hub)) 
-    dct_neg_hub = dict(sorted(dct_neg_hub.items(), key=lambda x:x[1], reverse=True)) # {'telegram.org': 4, 'vk.com': 3, 'ok.ru': 1}
-    # позитив
+    dct_neg_hub = dict(Counter(neg_hub))
+    dct_neg_hub = dict(sorted(dct_neg_hub.items(), key=lambda x: x[1], reverse=True))
+
     pos_hub = [x['_source']['hub'] for x in data if x['_source']['toneMark'] == 1]
-    dct_pos_hub = dict(Counter(pos_hub)) 
-    dct_pos_hub = dict(sorted(dct_pos_hub.items(), key=lambda x:x[1], reverse=True))
-    # dct_pos_hub = json.dumps(dct_pos_hub)
+    dct_pos_hub = dict(Counter(pos_hub))
+    dct_pos_hub = dict(sorted(dct_pos_hub.items(), key=lambda x: x[1], reverse=True))
 
-    ### получение данных для ландшафта авторов по позитиву и негативу
-
-    ## авторы негатива
+    # Обработка авторов (негатив)
     neg_authors = [x['_source'] for x in data if x['_source']['toneMark'] == -1]
-    pos_authors = [x['_source'] for x in data if x['_source']['toneMark'] == 1]
-
-    # группировка авторов по истонику (hub)
     neg_authors_hub = []
     for key in dct_neg_hub.keys():
-        neg_authors_hub.append([(x['authorObject'], [{"text": x['text'], "hub": x['hub'], "url": x['url'], "er": x['er'], 
-                                "viewsCount": x['viewsCount'], "region": x['region']}]) for x in neg_authors if x['hub'] == key])
-    
-    # получение итогового словаря по негативным авторам с учетом данных сколько текстов написал автор
-    a = []
-    for i in range(len(neg_authors_hub)):
-        name_unique_author = [x[0]['fullname'] if 'fullname' in x[0] else neg_authors_hub[i][0][1][0]['hub'] for x in neg_authors_hub[i]]
-        dct_non_unique_author = dict(Counter(name_unique_author))
-        list_non_unique_authors = list(set([key for key, val in dct_non_unique_author.items() if val > 1]))
-        list_unique_authors = list(set([key for key, val in dct_non_unique_author.items() if val == 1]))
+        neg_authors_hub.append([(x['authorObject'], [{"text": x['text'], "hub": x['hub'], "url": x['url'], "er": x['er'],
+                                                      "viewsCount": x['viewsCount'], "region": x['region']}])
+                                for x in neg_authors if x['hub'] == key])
 
-        # если есть неуникальные авторы (несколько текстов от автора за период)
-        if list_non_unique_authors != []:
-            for k in range(len(list_non_unique_authors)):
-                c ={}
-                c['author_data'] = []
-                # забираем словарь с authorobject
-                try:
-                    author_dict = [x[0] for x in neg_authors_hub[i] if x[0]['fullname'] == list_non_unique_authors[k]][0]
-                    texts = [x[1] for x in neg_authors_hub[i] if x[0]['fullname'] == list_non_unique_authors[k]] # тексты автора за период
-                    author_dict['count_texts'] = len(texts)
+    a = process_authors_data(neg_authors_hub)
 
-            #         добавляем тексты автора
-                    author_dict['texts'] = texts
-
-                except:
-                    author_dict = {'fullname': neg_authors_hub[i][0][1][0]['hub'], 'url': neg_authors_hub[i][0][1][0]['hub'], 
-                                'author_type': 'СМИ', 'sex': '', 'age': ''}
-                    texts = [x[1] for x in neg_authors_hub[i] if x[1][0]['hub'] == list_non_unique_authors[k]] # тексты автора за период
-                    author_dict['count_texts'] = len(texts)
-            #         добавляем тексты автора
-                    author_dict['texts'] = texts
-
-                c['author_data'].append(author_dict)
-                a.append(c)
-
-        if list_unique_authors != []:
-            # сбор уникальных (с одним текстом за период) авторов
-            
-            for u in range(len(list_unique_authors)):
-                c ={}
-                c['author_data'] = []
-                # забираем словарь с authorobject
-                try:
-                    author_dict = [x[0] for x in neg_authors_hub[i] if x[0]['fullname'] == list_unique_authors[u]][0]
-                    texts = [x[1] for x in neg_authors_hub[i] if x[0]['fullname'] == list_unique_authors[u]] # тексты автора за период
-                    author_dict['count_texts'] = len(texts)
-
-            #         добавляем тексты автора
-                    author_dict['texts'] = texts
-
-                except:
-                    author_dict = {'fullname': neg_authors_hub[i][0][1][0]['hub'], 'url': neg_authors_hub[i][0][1][0]['hub'], 
-                                'author_type': 'СМИ', 'sex': '', 'age': ''}
-                    texts = [x[1] for x in neg_authors_hub[i] if x[1][0]['hub'] == list_unique_authors[u]] # тексты автора за период
-                    author_dict['count_texts'] = len(texts)
-            #         добавляем тексты автора
-                    author_dict['texts'] = texts
-
-                c['author_data'].append(author_dict)
-                a.append(c)
-
-    ## авторы позитива
+    # Обработка авторов (позитив)
     pos_authors = [x['_source'] for x in data if x['_source']['toneMark'] == 1]
-
-    # группировка авторов по истонику (hub)
     pos_authors_hub = []
     for key in dct_pos_hub.keys():
-        pos_authors_hub.append([(x['authorObject'], [{"text": x['text'], "hub": x['hub'], "url": x['url'], "er": x['er'], 
-                                "viewsCount": x['viewsCount'], "region": x['region']}]) for x in pos_authors if x['hub'] == key])
-    
-    # получение итогового словаря по позитивным авторам с учетом данных сколько текстов написал автор
-    ### получение данных для ландшафта авторов по позитиву и негативу
+        pos_authors_hub.append([(x['authorObject'], [{"text": x['text'], "hub": x['hub'], "url": x['url'], "er": x['er'],
+                                                      "viewsCount": x['viewsCount'], "region": x['region']}])
+                                for x in pos_authors if x['hub'] == key])
 
-    ## авторы позитива
-    # группировка авторов по истонику (hub)
-    pos_authors_hub = [] 
-    for key in dct_pos_hub.keys():
-        pos_authors_hub.append([(x['authorObject'], [{"text": x['text'], "hub": x['hub'], "url": x['url'], "er": x['er'], 
-                                    "viewsCount": x['viewsCount'], "region": x['region']}]) for x in pos_authors if x['hub'] == key])
+    d = process_authors_data(pos_authors_hub)
 
-    # получение итогового словаря по негативным авторам с учетом данных сколько текстов написал автор
-    d = []
-    for i in range(len(pos_authors_hub)):
-        
-        name_unique_author = [x[0]['fullname'] if 'fullname' in x[0] else pos_authors_hub[i][0][1][0]['hub'] for x in pos_authors_hub[i]]
+    # Преобразование словарей для hubs в список объектов
+    dct_pos_hub = [{"name": key, "values": value} for key, value in dct_pos_hub.items()]
+    dct_neg_hub = [{"name": key, "values": value} for key, value in dct_neg_hub.items()]
+
+    # Формирование итоговых данных
+    values = Model_TonalityLandscape(
+        tonality_values={"negative_count": len(neg), "positive_count": len(pos)},
+        tonality_hubs_values={"negative_hubs": dct_neg_hub, "positive_hubs": dct_pos_hub},
+        negative_authors_values=a,
+        positive_authors_values=d
+    )
+    return values
+
+
+def process_authors_data(authors_hub):
+    """
+    Обработка данных об авторах и подготовка информации в требуемом формате.
+    """
+    authors_list = []
+    for i in range(len(authors_hub)):
+        name_unique_author = [
+            x[0].get('fullname', x[0].get('hub', '')) for x in authors_hub[i]
+        ]
         dct_non_unique_author = dict(Counter(name_unique_author))
         list_non_unique_authors = list(set([key for key, val in dct_non_unique_author.items() if val > 1]))
         list_unique_authors = list(set([key for key, val in dct_non_unique_author.items() if val == 1]))
 
-        # если есть неуникальные авторы (несколько текстов от автора за период)
-        if list_non_unique_authors != []:
-            list_non_unique_authors = list(set([key for key, val in dct_non_unique_author.items() if val > 1]))
-            for k in range(len(list_non_unique_authors)):
-                
-                c ={}
-                c['author_data'] = []
-                # забираем словарь с authorobject
-                try:
-                    author_dict = [x[0] for x in pos_authors_hub[i] if x[0]['fullname'] == list_non_unique_authors[k]][0]
-                    texts = [x[1] for x in pos_authors_hub[i] if x[0]['fullname'] == list_non_unique_authors[k]] # тексты автора за период
-                    author_dict['count_texts'] = len(texts)
+        # Обработка неуникальных авторов
+        for author_name in list_non_unique_authors:
+            c = {}
+            c['author_data'] = []
+            try:
+                author_dict = [
+                    x[0] for x in authors_hub[i]
+                    if x[0].get('fullname', x[0].get('hub', '')) == author_name
+                ][0]
+                texts_raw = [
+                    x[1] for x in authors_hub[i]
+                    if x[0].get('fullname', x[0].get('hub', '')) == author_name
+                ]
+                texts = []
 
-            #         добавляем тексты автора
-                    author_dict['texts'] = texts
+                # Преобразуем каждый текст в формат класса Text
+                for text_group in texts_raw:
+                    for text_item in text_group:
+                        try:
+                            text = Text(
+                                text=text_item.get('text', ''),
+                                hub=text_item.get('hub', ''),
+                                url=text_item.get('url', ''),
+                                er=text_item.get('er'),
+                                viewsCount=text_item.get('viewsCount'),
+                                region=text_item.get('region')
+                            )
+                            texts.append(text.dict())  # Добавляем словарь, совместимый с Pydantic
+                        except Exception as e:
+                            print(f"Ошибка обработки текста: {e}")
 
-                except:
-                    author_dict = {'fullname': pos_authors_hub[i][0][1][0]['hub'], 'url': pos_authors_hub[i][0][1][0]['hub'], 
-                                'author_type': 'СМИ', 'sex': '', 'age': ''}
-                    texts = [x[1] for x in pos_authors_hub[i] if x[1][0]['hub'] == list_non_unique_authors[k]] # тексты автора за период
-                    author_dict['count_texts'] = len(texts)
-            #         добавляем тексты автора
-                    author_dict['texts'] = texts
+                author_dict['count_texts'] = len(texts)
+                author_dict['texts'] = texts
 
-                c['author_data'].append(author_dict)
-                d.append(c)
+                # Если URL автора пуст, заменяем на URL первого текста
+                if not author_dict.get('url'):
+                    author_dict['url'] = texts[0]['url'] if texts else ''
 
-        if list_unique_authors != []:
-            # сбор уникальных (с одним текстом за период) авторов
-            list_unique_authors = list(set([key for key, val in dct_non_unique_author.items() if val == 1]))
-            for u in range(len(list_unique_authors)):
-                c ={}
-                c['author_data'] = []
-                # забираем словарь с authorobject
-                try:
-                    author_dict = [x[0] for x in pos_authors_hub[i] if x[0]['fullname'] == list_unique_authors[u]][0]
-                    texts = [x[1] for x in pos_authors_hub[i] if x[0]['fullname'] == list_unique_authors[u]] # тексты автора за период
-                    author_dict['count_texts'] = len(texts)
+            except Exception as e:
+                print(f"Ошибка обработки неуникального автора {author_name}: {e}")
+                author_dict = {
+                    'fullname': authors_hub[i][0][1][0].get('hub', ''),
+                    'url': authors_hub[i][0][1][0].get('hub', ''),
+                    'author_type': 'СМИ',
+                    'sex': '',
+                    'age': '',
+                    'count_texts': 0,
+                    'texts': []
+                }
 
-            #         добавляем тексты автора
-                    author_dict['texts'] = texts
+            c['author_data'].append(author_dict)
+            authors_list.append(c)
 
-                except:
-                    author_dict = {'fullname': pos_authors_hub[i][0][1][0]['hub'], 'url': pos_authors_hub[i][0][1][0]['hub'], 
-                                'author_type': 'СМИ', 'sex': '', 'age': ''}
-                    texts = [x[1] for x in pos_authors_hub[i] if x[1][0]['hub'] == list_unique_authors[u]] # тексты автора за период
-                    author_dict['count_texts'] = len(texts)
-            #         добавляем тексты автора
-                    author_dict['texts'] = texts
+        # Обработка уникальных авторов
+        for author_name in list_unique_authors:
+            c = {}
+            c['author_data'] = []
+            try:
+                author_dict = [
+                    x[0] for x in authors_hub[i]
+                    if x[0].get('fullname', x[0].get('hub', '')) == author_name
+                ][0]
+                texts_raw = [
+                    x[1] for x in authors_hub[i]
+                    if x[0].get('fullname', x[0].get('hub', '')) == author_name
+                ]
+                texts = []
 
-                c['author_data'].append(author_dict)
-                d.append(c)
+                # Преобразуем каждый текст в формат класса Text
+                for text_group in texts_raw:
+                    for text_item in text_group:
+                        try:
+                            text = Text(
+                                text=text_item.get('text', ''),
+                                hub=text_item.get('hub', ''),
+                                url=text_item.get('url', ''),
+                                er=text_item.get('er'),
+                                viewsCount=text_item.get('viewsCount'),
+                                region=text_item.get('region')
+                            )
+                            texts.append(text.dict())  # Добавляем словарь, совместимый с Pydantic
+                        except Exception as e:
+                            print(f"Ошибка обработки текста: {e}")
 
-    lst_items = list(dct_pos_hub.items())
-    dct_pos_hub = [{"name": x[0], "values": x[1]} for x in lst_items]
+                author_dict['count_texts'] = len(texts)
+                author_dict['texts'] = texts
 
-    lst_items = list(dct_neg_hub.items())
-    dct_neg_hub = [{"name": x[0], "values": x[1]} for x in lst_items]
+                # Если URL автора пуст, заменяем на URL первого текста
+                if not author_dict.get('url'):
+                    author_dict['url'] = texts[0]['url'] if texts else ''
 
-    values = {}
-    values['negative_count'] = len(neg)
-    values['positive_count'] = len(pos)
+            except Exception as e:
+                print(f"Ошибка обработки уникального автора {author_name}: {e}")
+                author_dict = {
+                    'fullname': authors_hub[i][0][1][0].get('hub', ''),
+                    'url': authors_hub[i][0][1][0].get('hub', ''),
+                    'author_type': 'СМИ',
+                    'sex': '',
+                    'age': '',
+                    'count_texts': 0,
+                    'texts': []
+                }
 
-    values['dct_neg_hub'] = dct_neg_hub
-    values['dct_pos_hub'] = dct_pos_hub
+            c['author_data'].append(author_dict)
+            authors_list.append(c)
 
-    values['neg_authors'] = a
-    values['pos_authors'] = d
-
-    # return values
-    values = Model_TonalityLandscape(tonality_values={"negative_count": len(neg), "positive_count": len(pos)}, 
-                 tonality_hubs_values={"negative_hubs": dct_neg_hub, "positive_hubs": dct_pos_hub}, negative_authors_values=a, positive_authors_values=d)
-    return values
+    return authors_list
 
 
 @app.get('/information_graph')
@@ -858,9 +781,6 @@ async def information_graph(index: int=None,
     for i in range(dff.shape[0]):
         if list(np.where(dff.loc[i].values >= threashhold)[0]) != []:
             if i not in [item for sublist in list(fin_dict.values()) for item in sublist]:
-                #             if list(np.where(dff.loc[i].values >= threashhold)[0]) in fin_dict.values():
-                #                 fin_dict[list(fin_dict.keys())[list(fin_dict.values()).index(list(np.where(dff.loc[i].values >= threashhold)[0]))]].append(i)
-                #             else:
                 fin_dict[i] = list(
                     np.where(dff.loc[i].values >= threashhold)[0])
                 
@@ -1144,8 +1064,6 @@ async def voice_analize(user: User = Depends(current_user), index: int = None,
     for i in range(len(search)):
 
         data = elastic_query(theme_index=indexes[index], query_str=search[i])
-        print(len(data))
-        # data = es.search(index='skillfactory_zaprosy_na_obuchenie_15.01.2024-21.01.2024', query_str='data')
 
         # отфильтровываем по необходимой дате из календаря
         data = [x for x in data if min_date <= x['timeCreate'] <= max_date]
@@ -1599,100 +1517,6 @@ async def ai_analytics_get(index: int=None, min_date: int=None, max_date: int=No
     return ModelAiAnalytics(data=data)
 
 
-# async def create_llm_query(data, query, task_id, text_ids):
-
-#     LLM = {} # данные для возврата вида {'text': 'описание'}
-#     LLM['promt'] = query
-#     LLM['texts'] = []
-
-#     print(task_id)
-#     # print(redis_db[task_id], "step")
-#     # print(len(data))
-
-#     for i in range(len(data)): # цикл работы LLM с выбранными текстами
-
-#         from transformers import AutoTokenizer, pipeline
-#         os.chdir('/home/dev/fastapi/analytics_app/data/LLM_models')
-
-#         model = "gemma-2b-it"
-#         tokenizer = AutoTokenizer.from_pretrained(model)
-#         pipeline = pipeline(
-#             "text-generation",
-#             model=model,
-#             model_kwargs={"torch_dtype": torch.bfloat16},
-#             device="cuda",
-#         ) 
-        
-#         st = time.time()      
-
-#         # print(int(((i + 1) / len(data)*100)))
-
-#         messages = [
-#             {"role": "user", "content": query + data[i]['text']},
-#         ]
-#         prompt = pipeline.tokenizer.apply_chat_template(messages, tokenize=False, add_generation_prompt=True)
-#         outputs = pipeline( 
-#             prompt,
-#             max_new_tokens=256,
-#             do_sample=True,
-#             temperature=0.7,
-#             top_k=50,
-#             top_p=0.95,
-#             batch_size=32
-#         )
-#         LLM['texts'].append({'id':text_ids[i], 'text': data[i]['text'], 
-#                                 'llm_text': outputs[0]['generated_text'].split('model\n')[1]})
-
-#         torch.cuda.empty_cache()
-#         gc.collect()
-
-#         del prompt
-#         del outputs
-#         del model 
-#         del pipeline
-
-#         redis_db[task_id] = int(((i + 1) / len(data)*100))
-
-#         # get the execution time
-#         et = time.time()
-#         elapsed_time = et - st 
-#         # print(elapsed_time)
-#         # print('Execution time:', elapsed_time, 'seconds') 
-
-#         await asyncio.sleep(1)
-#         redis_db[task_id] = int(((i + 1) / len(data)*100))
-    
-
-# @app.post('/ai-analytics')
-# async def ai_analytics_post(query: QueryAiLLM):
-
-#     # Путь к файлу с темами 
-#     file_path = '/home/dev/fastapi/analytics_app/data/indexes.pkl'
-#     # Загрузка словаря с темами
-#     indexes = load_dict_from_pickle(file_path)
-
-#     # делаем запрос на текстовый поиск
-#     data = elastic_query(theme_index=indexes[query.index], query_str='all')
-#     # отфильтровываем по необходимой дате из календаря
-#     data = [x for x in data if query.min_date <= x['timeCreate'] <= query.max_date]
-    
-#     # если был введен промт и выбраны строчки текстов (индексты в таблице данных), то начать запрос к LLM
-#     # query.promt = "Какая тематика у этого текста? Текст: "
-#     data = [data[x] for x in query.texts_ids]
-
-#     # print(data)
-#     task_id = "llm_task" + '_' + str(len(redis_db.keys()))
-#     print(task_id)
-
-#     redis_db.mset({task_id: 0})
-
-#     task = asyncio.create_task(
-#         create_llm_query(data, query.promt, task_id, query.texts_ids)
-#     )
-
-#     return task_id
-    
-
 # Определение модели запроса
 class QueryCompetitors(BaseModel):
     themes_ind: list
@@ -1825,6 +1649,15 @@ async def competitors(query: QueryCompetitors):
             'values': [{'timestamp': int(row.time * 1000), 'count': row.count} for row in aggregated_data.itertuples()]
         })
 
+    # Функция для безопасного преобразования в int
+    def safe_to_int(value):
+        try:
+            # Преобразуем в целое число
+            return int(value)
+        except (ValueError, TypeError):  
+            # Если преобразование невозможно, возвращаем 0
+            return 0
+
     # Формирование второго графика (second_graph)
     second_graph = []
     for theme_data, filename in zip(another_graph, filenames):
@@ -1832,6 +1665,7 @@ async def competitors(query: QueryCompetitors):
 
         # Данные только по SMI (hubtype == 'Онлайн-СМИ')
         smi_data = df[df['hubtype'] == 'Онлайн-СМИ']
+
         neg_smi = smi_data[smi_data['toneMark'] == -1].groupby('hub').agg(
             count=('hub', 'size'),
             citeIndex=('citeIndex', 'first'),
@@ -1843,17 +1677,35 @@ async def competitors(query: QueryCompetitors):
             citeIndex=('citeIndex', 'first'),
             url=('url', 'first')
         ).reset_index()
-
+        
+        # Обработка данных SMI
         second_graph.append({
             'index_name': filename,
             'SMI': {
-                'neg': [{'hub': row['hub'], 'count': row['count'], 'rating': row['citeIndex'], 'url': row['url']} for _, row in neg_smi.iterrows()],
-                'pos': [{'hub': row['hub'], 'count': row['count'], 'rating': row['citeIndex'], 'url': row['url']} for _, row in pos_smi.iterrows()],
+                'neg': [
+                    {
+                        'hub': row['hub'],
+                        'count': row['count'],
+                        'rating': safe_to_int(row['citeIndex']),  # Изменено на безопасное преобразование
+                        'url': row['url']
+                    }
+                    for _, row in neg_smi.iterrows()
+                ],
+                'pos': [
+                    {
+                        'hub': row['hub'],
+                        'count': row['count'],
+                        'rating': safe_to_int(row['citeIndex']),  # Изменено на безопасное преобразование
+                        'url': row['url']
+                    }
+                    for _, row in pos_smi.iterrows()
+                ],
             }
         })
 
         # Данные только по Соцмедиа (hubtype != 'Онлайн-СМИ')
         socmedia_data = df[df['hubtype'] != 'Онлайн-СМИ']
+
         neg_socmedia = socmedia_data[socmedia_data['toneMark'] == -1].groupby('hub').agg(
             count=('hub', 'size'),
             audienceCount=('audienceCount', 'first'),
@@ -1866,9 +1718,26 @@ async def competitors(query: QueryCompetitors):
             url=('url', 'first')
         ).reset_index()
 
+        # Обработка данных Socmedia
         second_graph[-1]['Socmedia'] = {
-            'neg': [{'hub': row['hub'], 'count': row['count'], 'rating': row['audienceCount'], 'url': row['url']} for _, row in neg_socmedia.iterrows()],
-            'pos': [{'hub': row['hub'], 'count': row['count'], 'rating': row['audienceCount'], 'url': row['url']} for _, row in pos_socmedia.iterrows()],
+            'neg': [
+                {
+                    'hub': row['hub'],
+                    'count': row['count'],
+                    'rating': safe_to_int(row['audienceCount']),  # Изменено на безопасное преобразование
+                    'url': row['url']
+                }
+                for _, row in neg_socmedia.iterrows()
+            ],
+            'pos': [
+                {
+                    'hub': row['hub'],
+                    'count': row['count'],
+                    'rating': safe_to_int(row['audienceCount']),  # Изменено на безопасное преобразование
+                    'url': row['url']
+                }
+                for _, row in pos_socmedia.iterrows()
+            ],
         }
 
     # Формирование третьего графика (third_graph)
@@ -1917,32 +1786,6 @@ async def competitors(query: QueryCompetitors):
         'second_graph': second_graph,
         'third_graph': third_graph,
     }
-
-
-# @app.get('/data-folders')
-# async def data_folders(user: User = Depends(current_user)) -> ModelDataFolder:
-
-#     es_indexes = [index for index in es.indices.get('*')] # список всех индексов elastic
-#     es_indexes = [x.strip() for x in es_indexes]
-
-#     if user.theme_rules["perm"] == 'admin': # если пользователь админ, то вернуть все темы
-
-#         folders = '/home/dev/fastapi/analytics_app/data/json_files'
-#         sub_folders = [name for name in os.listdir(folders) if os.path.isdir(os.path.join(folders, name))]
-
-#         data_values = []
-#         os.chdir(folders)
-#         for i in range(len(sub_folders)):
-#             data_values.append({"name": sub_folders[i], 
-#                                "values": [f for f in listdir(sub_folders[i]) if isfile(join(sub_folders[i], f))]}) 
-      
-#         return ModelDataFolder(values=data_values)
-    
-#     else: # если пользователь не админ, то вернуть его темы
-#         data_index = []
-#         user_index = list(set(es_indexes) & set([x.strip().lower().replace('.json', '') for x in user.theme_rules.split(',')]))
-
-#         return ModelDataFolder(values=data_values)
 
 
 @app.get("/create-data-projector/{user_id}/{folder_name}/{file_name}")
@@ -2109,7 +1952,7 @@ async def create_data_projector(user_id: str, folder_name: str, file_name: str):
         print(f"Ошибка при сохранении файлов: {e}")
 
     # Сохранение данных о папке и файлах в Redis
-    user_data = redis_db.hgetall(user_id)
+    user_data = await redis_db.hgetall(user_id)
 
     if not user_data:  # Проверяем, есть ли данные
         raise Exception("User data does not exist.")
@@ -2134,7 +1977,7 @@ async def create_data_projector(user_id: str, folder_name: str, file_name: str):
     user_folders[folder_name].append(file_info)
 
     # Сохраняем обновленные данные обратно в Redis
-    redis_db.hset(user_id, "projector_files_directory", json.dumps(user_folders))
+    await redis_db.hset(user_id, "projector_files_directory", json.dumps(user_folders))
 
     return f"Файлы авторов для прожектора темы {file_name} созданы и сохранены в папку {folder_name}!"
 
@@ -2156,8 +1999,9 @@ async def create_data_projector(user_id: str, folder_name: str, file_name: str):
 
 @app.get('/file-load/{user_id}/{file_type}/{folder_name}/{file_name}')
 def load_file(user_id: str, file_type: str, folder_name: str, file_name: str):
+    # Логируем параметры запроса для отладки
+    print(f"Received request with parameters: user_id={user_id}, file_type={file_type}, folder_name={folder_name}, file_name={file_name}")
 
-    # Основная директория, где хранятся папки с файлами
     BASE_DIR = '/home/dev/fastapi/analytics_app/data'
     PROJECTOR_DIR = os.path.join(BASE_DIR, user_id, 'projector_files_directory', folder_name)
     JSON_DIR = os.path.join(BASE_DIR, user_id, 'json_files_directory', folder_name)
@@ -2166,17 +2010,16 @@ def load_file(user_id: str, file_type: str, folder_name: str, file_name: str):
     # Определяем полный путь к файлу на основе типа файла
     if file_type == 'projector_files_directory':
         file_path = os.path.join(PROJECTOR_DIR, file_name)
-    if file_type == 'bertopic_files_directory':
+    elif file_type == 'bertopic_files_directory':
         file_path = os.path.join(BERTOPIC_DIR, file_name)
-        print(file_path)
     elif file_type == 'json_files_directory':
         if '.json' not in file_name:
-            file_name = file_name + '.json'
+            file_name += '.json'
         file_path = os.path.join(JSON_DIR, file_name)
     else:
-        raise HTTPException(status_code=400, detail="Invalid file type. Use 'projector' or 'json'.")
+        raise HTTPException(status_code=400, detail="Invalid file type. Use 'projector_files_directory', 'bertopic_files_directory' or 'json_files_directory'.")
     
-    print(file_path)
+
     # Проверка существования файла
     if not os.path.isfile(file_path):
         raise HTTPException(status_code=404, detail="File not found")
@@ -2228,17 +2071,53 @@ def update_progress(user_id, task_id, progress):
     with open('llm_history_progress.pickle', 'wb') as file:
         pickle.dump(llm_history, file)
 
+
+from fastapi.exceptions import RequestValidationError
+from fastapi.responses import HTMLResponse
+
+@app.exception_handler(RequestValidationError)
+async def validation_exception_handler(request: Request, exc: RequestValidationError):
+    return HTMLResponse(content=f"Ошибка валидации: {exc.errors()}", status_code=422)
+
+
+def sanitize_string(input_string):
+    if input_string is None:
+        return input_string
+    return input_string.replace("'", "\\'").replace('"', '\\"')
+
 # Модель для задачи
 class AnalysisRequest(BaseModel):
-    index: int = None
-    min_date: int = None
-    max_date: int = None
-    query_str: str = None
-    system_prompt: str = None
-    example_promt: str = None
-    main_prompt: str = None
-    user_id: int = None
-    folder_name: str = None
+    user_id: int
+    folder_name: str
+    index: int
+    min_date: int
+    max_date: int
+    query_str: Optional[str] = None
+    system_prompt: Optional[str] = None
+    example_text: str  # Текст примера
+    example_thematics: str  # Тематики в тексте-примере
+    example_question_keywords: str  # Вопрос для ключевых слов текста
+    example_keywords: str  # Ключевые слова
+    example_question: str  # Вопрос
+
+    def __init__(self, **data):
+        super().__init__(**data)  # Вызываем родительский конструктор
+        # Очищаем строковые поля
+        self.example_text = self.clean_string(self.example_text)
+        self.example_thematics = self.clean_string(self.example_thematics)
+        self.example_question_keywords = self.clean_string(self.example_question_keywords)
+        self.example_keywords = self.clean_string(self.example_keywords)
+        self.example_question = self.clean_string(self.example_question)
+
+    @staticmethod
+    def clean_string(value: str) -> str:
+        # Удаляем все нежелательные символы (в данном случае управляющие символы)
+        if value is not None:
+            # Удаляем неразрешенные управляющие символы
+            value = re.sub(r'[\u0001-\u001F\u007F-\u009F]', '', value)
+            # Дополнительно можно экранировать одинарные кавычки
+            value = value.replace("'", "")
+        return value
 
 
 # Путь к файлу истории
@@ -2257,13 +2136,11 @@ def load_history(user_id):
 
 def save_history(user_id, history_data):
     """Сохраняет данные о задачах пользователя в файл."""
-    # Загружаем полную историю для обновления
     all_history = []
     if os.path.exists(HISTORY_FILE):
         with open(HISTORY_FILE, 'rb') as file:
             all_history = pickle.load(file)
 
-    # Смотрим, существует ли запись для данного user_id
     user_found = False
     for entry in all_history:
         if entry['user_id'] == user_id:
@@ -2272,564 +2149,309 @@ def save_history(user_id, history_data):
             break
 
     if not user_found:
-        # Если пользователь не найден, добавляем новый
         all_history.append({'user_id': user_id, 'values': history_data})
 
-    # Сохраняем обновленную историю обратно в файл
-    with open(HISTORY_FILE, 'wb') as file: 
+    with open(HISTORY_FILE, 'wb') as file:
         pickle.dump(all_history, file)
 
 
-@app.post("/llm-analyze/")
-async def llm_analyze(request: AnalysisRequest, background_tasks: BackgroundTasks):
-    """Эндпойнт для анализа запросов LLM и сохранения их истории."""
-    # Загружаем историю для пользователя
-    user_history = load_history(request.user_id)
-    current_date = datetime.now().date()
-    print(current_date)
+from run_llm_query import run_llm_query
+import uuid
+import asyncio
+# import redis  # redis-py >= 4.x (или 5.x)
+import traceback
+import redis.asyncio
 
+@app.on_event("startup")
+async def startup_event():
+    try:
+        await redis_db.ping()
+        print("Redis подключен!")
+    except Exception as e:
+        print(f"Ошибка подключения к Redis: {e}")
+        raise RuntimeError("Не удалось подключиться к Redis")
+
+
+@app.on_event("shutdown")
+async def shutdown_event():
+    await redis_db.close()
+
+
+# Проверка статуса GPU
+@app.get("/is_gpu_busy")
+async def is_gpu_busy() -> bool:
+    try:
+        status = await redis_db.get("gpu:status")
+        return status == b"busy"  # Redis возвращает данные в виде байт
+    except Exception as e:
+        logging.error(f"Ошибка при проверке статуса GPU: {e}")
+        return False
+
+
+# Установка статуса GPU
+async def set_gpu_status(status: str):
+    logging.info(f"Устанавливается статус GPU: {status}")
+    await redis_db.set("gpu:status", status)
+
+
+# Сброс статуса GPU
+async def reset_gpu_status():
+    await set_gpu_status("idle")
+
+
+# Обработка LLM задач
+@app.post("/llm-run/")
+async def llm_run(
+    analysis_request: AnalysisRequest,
+    background_tasks: BackgroundTasks
+):
+    try:
+        task_id = str(uuid.uuid4())
+        # Создаем task_data на основе входной модели `AnalysisRequest`
+        # Преобразуем данные в строковый формат перед сохранением
+        task_data = {
+            "task_id": str(task_id),
+            "user_id": str(analysis_request.user_id),
+            "folder_name": str(analysis_request.folder_name),
+            "index": str(analysis_request.index),
+            "query_str": analysis_request.query_str or "all",  # Используем "all", если `query_str` не передано
+            "min_date": str(analysis_request.min_date),
+            "max_date": str(analysis_request.max_date),
+            "system_prompt": analysis_request.system_prompt or "",  # Пустая строка, если не указано
+            "example_text": analysis_request.example_text or "",
+            "example_thematics": analysis_request.example_thematics or "",
+            "example_question_keywords": analysis_request.example_question_keywords or "",
+            "example_keywords": analysis_request.example_keywords or "",
+            "example_question": analysis_request.example_question or "",
+            "status": "pending",
+            "total_texts": "0",  # Значение "0" всегда строка
+            "completed_texts": "0",  # Значение "0" всегда строка
+            "progress": "0",  # Значение "0" всегда строка
+        }
+
+        # Убедимся, что все значения в task_data не равны None, и преобразуем их в строки
+        task_data = {key: (str(value) if value is not None else "") for key, value in task_data.items()}
+
+        # Сохраняем задачу в Redis
+        await redis_db.hset(f"task:{task_id}", mapping=task_data)
+        await redis_db.rpush("queue:tasks", task_id)
+
+        # Проверяем сохранение
+        saved_task = await redis_db.hgetall(f"task:{task_id}")
+        print(999000555)
+        # Преобразование байтов в строки с помощью dictionary comprehension
+        decoded_task = {key.decode('utf-8'): value.decode('utf-8') for key, value in saved_task.items()}
+
+        # Теперь ключи и значения в формате строк
+        print(decoded_task)
+
+        if not saved_task:
+            raise Exception(f"Ошибка сохранения данных для задачи {task_id}!") 
+
+        # Проверяем статус GPU
+        if not await is_gpu_busy():
+            await set_gpu_status("busy")
+            next_task_id = await redis_db.lpop("queue:tasks")
+            if next_task_id:
+                # Добавляем задачу в фоновое выполнение
+                background_tasks.add_task(process_task, next_task_id, decoded_task)
+
+        return {"message": "Задача добавлена в очередь", "task_id": task_id, "status": "pending"}
+
+    except Exception as e:
+        logging.error(f"Ошибка при создании задачи: {e}")
+        return {"error": f"Ошибка: {e}"}
+
+
+async def process_task(task_id: str, task_data: dict):
+    try:
+        logging.info(f"Начата обработка задачи: {task_id}")
+
+        # Убедимся, что task_id - в строковом формате
+        task_id = task_id if isinstance(task_id, str) else task_id.decode()
+
+        # Логируем ключ задачи
+        logging.info(f"Пытаемся получить данные задачи для ключа task:{task_id}")
+
+        # # Преобразуем значения Redis (если возвращаются байты)
+        # task_data = {k: v.decode() if isinstance(v, bytes) else v for k, v in task_data.items()}
+
+        # Получаем данные задачи из Redis
+        # task_data = await redis_db.hgetall(f"task:{task_id}")
+        # if not task_data:
+        #     raise Exception(f"Задача {task_id}: данные не найдены в Redis!")
+
+        # Декодируем данные задачи
+        # task_data = {k.decode("utf-8"): v.decode("utf-8") for k, v in task_data.items()}
+        # task_data["min_date"] = int(task_data["min_date"])
+        # task_data["max_date"] = int(task_data["max_date"])
+
+        # task_data = {key.decode('utf-8'): value.decode('utf-8') for key, value in task_data.items()}
+        # print(777999888)
+        # print(task_data)
+
+        # Обновляем статус задачи
+        await redis_db.hset(f"task:{task_id}", "status", "in_progress")
+
+        # Выполнение обработки (здесь пример)
+        await run_llm_query(task_data)
+
+        # Отмечаем задачу как завершенную
+        await redis_db.hset(f"task:{task_id}", "status", "done")
+
+    except Exception as e:
+        logging.error(f"Ошибка при обработке задачи {task_id}: {e}")
+        traceback.print_exc()
+
+        # Обновляем статус в случае ошибки
+        await redis_db.hset(f"task:{task_id}", mapping={"status": "failed", "error": str(e)})
+
+    finally:
+        # Сбрасываем статус GPU
+        await reset_gpu_status()
+        logging.info(f"GPU статус сброшен. Задача {task_id} завершена.")
+
+
+@app.get("/status/{task_id}")
+async def get_task_status(task_id: str):
+    # Ожидаем асинхронный вызов метода hgetall
+    task_data = await redis_db.hgetall(f"task:{task_id}")
+
+    # Проверяем, существует ли задача
+    if not task_data:
+        raise HTTPException(status_code=404, detail="Задача не найдена")
+
+    # Функция возвращает данные в удобном формате
+    return task_data
+
+
+@app.get("/llm-analyze")
+async def llm_analyze(user_id: int, folder_name: str, file_name: str):
+    # Получаем данные пользователя из Redis
+    user_data = redis_db.hgetall(user_id)
+    
+    # Преобразование байтовых строк в обычные строки
+    user_data = {key.decode('utf-8'): value.decode('utf-8') for key, value in user_data.items()}
+
+    # Декодируем JSON-значения в словари
+    for key, value in user_data.items():
+        try:
+            user_data[key] = json.loads(value)
+        except json.JSONDecodeError:
+            print(f"Ошибка декодирования JSON для ключа {key}: {value}")
+
+    if user_data is None:
+        raise HTTPException(status_code=404, detail="User not found")
+
+    # Находим нужный HTML-файл
+    html_files = user_data["bertopic_files_directory"].get(folder_name, [])
+    html_file_path = None
+
+    info_html = {}  # для использования далее в elasticsearch
+    # Ищем файл по указанному имени
+    for file_info in html_files:
+        if file_info["html-file"] == file_name:
+            info_html = file_info
+            html_file_path = os.path.join("/home/dev/fastapi/analytics_app/data", str(user_id), 
+                                           "bertopic_files_directory", folder_name, file_name)
+            break
+
+    if html_file_path is None or not os.path.exists(html_file_path):
+        raise HTTPException(status_code=404, detail="HTML file not found")
+
+    # Определяем базовое имя модели без расширения
+    model_file_name_base = file_name.replace('.html', '').split('_')[-1]  # Извлекаем идентификатор из имени
+
+    # Теперь ищем нужный модельный файл
+    model_folder_name = None
+    for file_info in html_files:
+        if model_file_name_base in file_info["model-file"]:
+            model_folder_name = folder_name  # Используем текущее имя папки
+            break
+
+    if model_folder_name is None:
+        raise HTTPException(status_code=404, detail="Model folder not found")
+
+    # Создаем путь к модели
+    model_path = os.path.join("/home/dev/fastapi/analytics_app/data", str(user_id), 
+                               "bertopic_files_directory", model_folder_name, 
+                               next(file_info["model-file"] for file_info in html_files if model_file_name_base in file_info["model-file"]))
+
+    # Проверяем, существует ли путь к модели
+    if not os.path.exists(model_path):
+        raise HTTPException(status_code=404, detail="Model file not found")
+
+    # Здесь можно открыть и использовать модель BERTopic
+    topic_model = BERTopic.load(model_path)
+
+    # Поиск в elastic за те же даты и строку поиска
     # Путь к файлу с темами 
     file_path = '/home/dev/fastapi/analytics_app/data/indexes.pkl'
     # Загрузка словаря с темами
     indexes = load_dict_from_pickle(file_path)
-
-    # Определяем уникальный номер задач для текущей даты
-    if 'llm_queries' not in user_history:
-        user_history['llm_queries'] = {}
-
-    # Если по текущей дате еще нет задач, инициализируем её
-    if str(current_date) not in user_history['llm_queries']:
-        user_history['llm_queries'][str(current_date)] = []
-
-    today_tasks = user_history['llm_queries'][str(current_date)]
-
-    # Получаем уникальный номер задачи
-    last_task_number = len(today_tasks) + 1
-
-    # Определяем ключ для новой задачи
-    task_key = f'task_{last_task_number}'
-
-    datetime_name = f"{current_date.strftime('%Y%m%d')}_{datetime.now().strftime('%H%M%S')}"
-
-    # Создаем новую запись для задания
-    new_query_data = { 
-        task_key: {
-            "status": "Данные обрабатываются", 
-            "total": 0, 
-            "completed": 0,
-            "percent": 0
-        },
-        'index': request.index,
-        'filename': indexes[request.index] + '_' + datetime_name,
-        'request_time': datetime_name,
-        'system_prompt': request.system_prompt,
-        'example_prompt': request.example_promt,
-        'main_prompt': request.main_prompt,
-        'min_date': request.min_date,
-        'max_date': request.max_date,
-        'query_str': request.query_str
-    }
-
-    # Добавляем новую задачу в текущую дату
-    today_tasks.append(new_query_data)
-
-    # Сохраняем обновленную историю
-    save_history(request.user_id, user_history)
-
-    # Добавление задачи в фон
-    background_tasks.add_task(run_llm_query, request, task_key, indexes)
     
-    return {"message": "Анализ запущен", "user_id": request.user_id, "task_key": task_key, "current_date": current_date}
+    # делаем запрос на текстовый поиск
+    if info_html['query_str'] is None:
+        info_html['query_str'] = 'all'
 
+    data = elastic_query(theme_index=indexes[info_html['index_number']], query_str=info_html['query_str'])
+    data = pd.DataFrame(data)
 
-async def run_llm_query(request: AnalysisRequest, task_key: str, indexes):
+    # Обработка тематики
+    df_topic = topic_model.get_topic_info()[['CustomName', 'Topic']]
+    dct_df_topic = dict(zip(df_topic['Topic'], df_topic['CustomName']))
+    thematics = [dct_df_topic[x] for x in topic_model.topics_]
 
-    await asyncio.sleep(0.01)
-    et = time.time()
-    # Получаем текущее время для добавления к имени файла
-    current_time = datetime.now().strftime('%Y%m%d_%H%M%S')
-    total_texts = 0  # Общее количество текстов
+    # Объединяем LLM с метаданными
+    data.rename(columns={'url': 'text_url'}, inplace=True)
+    data = data.join(pd.DataFrame(list(data['authorObject'].values)))
+    data.rename(columns={'url': 'author_url'}, inplace=True)
+    data = data[['timeCreate', 'hub', 'author_url', 'fullname', 'text_url', 'author_type', 'sex', 'age',
+                   'hubtype', 'commentsCount', 'audienceCount',
+                   'repostsCount', 'likesCount', 'er', 'viewsCount',
+                   'massMediaAudience', 'toneMark', 'country', 'region']]
 
-    if request.query_str != None:
-        search = request.query_str.split(',')
-        for i in range(len(search)):
-            data = elastic_query(theme_index=indexes[request.index], query_str=search[i])
+    # Получение полной таблицы
+    df_join = pd.DataFrame(thematics).join(data, how='inner', lsuffix='_df1', rsuffix='_df2')
+    df_join.columns = ['Тематика', 'Время', 'Источник', 'Ссылка на автора', 'Автор', 'Ссылка на текст', 'Тип автора', 'Пол', 'Возраст',
+                       'Тип источника', 'Аудитория', 'Комментариев', 'Репостов', 'Лайков', 'Вовлеченность', 'Просмотров',
+                       'Аудитория СМИ', 'Тональность', 'Страна', 'Регион']
 
-        # отфильтровываем по необходимой дате из календаря
-        data = [x for x in data if request.min_date <= x['timeCreate'] <= request.max_date]
+    df_join.drop('Аудитория СМИ', axis=1, inplace=True)
+    df_join['Тональность'] = df_join['Тональность'].map({0: 'Нейтральная', -1: 'Негатив', 1: 'Позитив'})
 
-    else:
-        data = elastic_query(theme_index=indexes[request.index], query_str='all')
-        data = [x for x in data if request.min_date <= x['timeCreate'] <= request.max_date]
-
-    ################################### data ###################################
-
-    # Тексты для обработки
-    texts = [x['text'] for x in data]
-    texts = texts[:15]
-    total_texts = len(texts)
-
-    et = time.time()
-
-    # Загрузка словаря истории запросов пользователей
-    os.chdir('/home/dev/fastapi/analytics_app/data')
-    with open('llm_history_progress.pickle', 'rb') as file:  # 'rb' - читать в бинарном формате
-        search_history = pickle.load(file)
-
-    print('Всего текстов: {}'.format(total_texts))
-
-    ################################### model ###################################
-
-    tokenizer = AutoTokenizer.from_pretrained("/home/dev/fastapi/analytics_app/data/LLM_models/Meta-Llama-3-8B-Instruct")
-    # model = AutoModelForCausalLM.from_pretrained("/home/dev/fastapi/analytics_app/data/LLM_models/Meta-Llama-3-8B-Instruct")
-
-    bnb_config = transformers.BitsAndBytesConfig(
-        load_in_4bit=True,  # 4-bit quantization
-        bnb_4bit_quant_type='nf4',  # Normalized float 4
-        bnb_4bit_use_double_quant=True,  # Second quantization after the first
-        bnb_4bit_compute_dtype=bfloat16  # Computation type
-    )
-
-    model = transformers.AutoModelForCausalLM.from_pretrained(
-        "/home/dev/fastapi/analytics_app/data/LLM_models/Meta-Llama-3-8B-Instruct",
-        trust_remote_code=True,
-        quantization_config=bnb_config,
-        device_map='auto',
-    )
-
-    ################################### promt ###################################
-    if request.system_prompt == None:
-        request.system_prompt = """
-        <s>[INST] <<SYS>>
-        You are a helpful, respectful and honest assistant for labeling topics.
-        <</SYS>>
-        """
-
-    # Example prompt demonstrating the output we are looking for
-    if request.example_promt == None:
-        request.example_promt = """
-        У меня есть следующий текст:
-        ЕАЭС-Китай: обсуждены перспективы сотрудничества в таможенной сфере
-
-        В штаб-квартире Евразийской экономической комиссии состоялась рабочая встреча министра по таможенному сотрудничеству ЕЭК Руслана Давыдова с таможенным советником Посольства Китайской Народной Республики в Российской Федерации Чжоу Вэньи.
-
-        Стороны обсудили вопросы налаживания информационного обмена, развития цифровой таможни, внедрения современных технологий. Особое внимание уделено интеллектуальной таможне, применению навигационных пломб и механизма «единого окна». Отдельно обсуждены перспективы развития таможенной инфраструктуры с учетом лучших мировых практик, бесшовного транзита в рамках сотрудничества ЕАЭС и Китайской Народной Республики. Рассмотрены возможные подходы к выявлению причин и минимизации расхождений статистических данных в торговле.
-
-
-        Тема описывается следующими ключевыми словами: 'министр, встреча, таможенное сотрудничество, ЕЭК, пломбы, ЕАЭС, Китай', цифровая таможня, интеллектуальная таможня.
-
-        Основываясь на информации о ключевых словах выше, пожалуйста, випиши тематики этого текста. Убедитесь, что вы возвращаете только тематики и ничего больше.
-
-        [/INST] Развитие транзита ЕАЭС, Встреча министра Руслана Давыдова, Внедрение современных технологий, интеллектуальная таможня
-        """
-
-    pipe = pipeline(
-        model=model,
-        tokenizer=tokenizer,
-        task='text-generation',
-        temperature=0.1,
-        max_new_tokens=500,
-        repetition_penalty=1.1,
-    )
-    # Установите pad_token_id
-    pipe.tokenizer.pad_token_id = pipe.model.config.eos_token_id 
-
-    gc.collect()
-    torch.cuda.empty_cache()
-    llm_answer = []
-
-    # Параметр для отслеживания количества обработанных текстов
-    completed_texts = 0
-
-    # Определяем общее количество текстов для завершения
-    total_texts = len(texts)
-    llm_answer = []
-    completed_texts = 0
-    count = 0
-
-    # Проверка схожести текстов: Для каждого текстового элемента проверяем, был ли он уже обработан. Если текст схож с ранее обработанными текстами (с использованием порога threshold), мы просто возвращаем кэшированный ответ.
-    # Кэширование результатов: Для каждого проанализированного текста сохраняем результат в словаре processed_texts. Таким образом, если текст встречается повторно или если его похожесть превышает определенный порог, мы можем избежать повторного анализа.
-    # Устранение повторных вычислений: Используем CountVectorizer и cosine_similarity, чтобы вычислить схожесть между новыми и существующими текстами, избегая необходимости в повторном запуске тяжелых вычислений, если текст уже был проанализирован.
-    # Обновление прогресса: Прогресс обновляется после каждой итерации, чтобы показать статус обработки.
+    # Получение агрегированной таблицы
+    df_group = df_join[['Тематика', 'Аудитория', 'Комментариев', 'Репостов', 'Лайков', 'Вовлеченность', 'Просмотров']].copy()
     
-    # Словарь для хранения уже обработанных текстов и их тематик
-    processed_texts = {}
+    numerical_columns = ['Аудитория', 'Комментариев', 'Репостов', 'Лайков', 'Вовлеченность', 'Просмотров']
+    
+    for column in numerical_columns:
+        df_group[column] = pd.to_numeric(df_group[column], errors='coerce')
+        df_group[column] = df_group[column].fillna(0).astype(int)
 
-    # Проверка схожести текстов
-    def check_similarity_and_process(single_text, threshold=0.8):
-        if single_text in processed_texts:
-            return processed_texts[single_text]  # Возвращаем кэшированный ответ
+    # Группировка по 'Тематика' и суммирование
+    result = df_group.groupby('Тематика').sum().reset_index()
 
-        # Формируем DataFrame для анализа
-        df_meta = pd.DataFrame({'text': [single_text]})
-        
-        # Проверка на существующие тексты
-        if len(processed_texts) > 0:
-            df_existing = pd.DataFrame(list(processed_texts.keys()), columns=['text'])
-            combined_df = pd.concat([df_meta, df_existing], ignore_index=True)
+    # Подсчет количества тем
+    theme_count = result['Тематика'].value_counts()
+    result['Количество'] = result['Тематика'].map(theme_count)
+    result.sort_values(by='Количество', ascending=False, inplace=True)
+    result = result[['Тематика', 'Количество', 'Аудитория', 'Комментариев', 'Репостов', 'Лайков', 'Вовлеченность', 'Просмотров']]
 
-            count_vectorizer = CountVectorizer()
-            vector_matrix = count_vectorizer.fit_transform(combined_df['text'].values)
-            cosine_similarity_matrix = cosine_similarity(vector_matrix)
+    # Замена NaN на None в итоговых данных
+    result = result.where(pd.notnull(result), None)
 
-            # Убираем диагональные элементы
-            for i in range(len(cosine_similarity_matrix)):
-                cosine_similarity_matrix[i][i] = 0
+    # Возвращение HTML файла и таблиц
+    with open(html_file_path, 'r', encoding='utf-8') as file:
+        html_content = file.read()
 
-            # Проверяем на схожесть
-            similar_indices = np.where(cosine_similarity_matrix[0] >= threshold)[0]
-            if len(similar_indices) > 0:
-                print('threshold сработал!')
-                # Если есть похожие тексты, берем ответ от первого найденного
-                return processed_texts[combined_df.iloc[similar_indices[0]]['text']]
-
-        # Здесь выполняем анализ текста
-        messages = [
-            {
-                "role": "system", 
-                "content": request.system_prompt + request.example_promt + 
-                'У меня есть следующий текст: ' + single_text + 
-                ' Основываясь на информации о ключевых словах выше, пожалуйста, выпишите тематики этого текста. Убедитесь, что вы возвращаете только тематики и ничего больше. Отвечайте на русском языке.'
-            }
-        ]
-
-        # Очищаем кэш перед вызовом модели
-        torch.cuda.empty_cache()
-
-        # Используем torch.no_grad() для предотвращения вычисления градиентов
-        with torch.no_grad():
-            response = pipe(messages, num_return_sequences=1)
-
-        # Обрабатываем ответ
-        result_text = response[0]['generated_text'][1]['content'].replace('[/INST]\n', '').replace('\n', '')
-
-        # Кэшируем результат
-        processed_texts[single_text] = result_text
-        return result_text
-
-    # Проходим через каждый текст по отдельности
-    for i in range(total_texts):
-        single_text = texts[i]
-
-        if len(single_text) < 15000:
-            answer = check_similarity_and_process(single_text)
-            llm_answer.append(answer)
-        else:
-            llm_answer.append('Длинный текст')
-            count += 1
-
-        # Обновление прогресса
-        completed_texts += 1
-        percent = round((completed_texts / total_texts) * 100, 1)
-        update_progress(request.user_id, task_key, {
-            "status": "Данные обрабатываются", 
-            "total": total_texts, 
-            "completed": completed_texts,
-            "percent": percent
-        })
-
-    # Завершение обработки
-    update_progress(request.user_id, task_key, {
-        "status": "Готово!", 
-        "total": total_texts, 
-        "completed": total_texts, 
-        "percent": 100
-    })
-
-    # ################################### BERTopic ###################################
-
-    # Pre-calculate embeddings
-    embedding_model = SentenceTransformer("DeepPavlov/rubert-base-cased-sentence")
-    embeddings = embedding_model.encode(llm_answer, show_progress_bar=True)
-
-
-    def score_clustering(embeddings, hdbscan_model, umap_model):
-        embeddings_reduced = umap_model.fit_transform(embeddings)
-        hdbscan_model.fit(embeddings_reduced)
-        labels = hdbscan_model.labels_
-        
-        if len(set(labels)) > 1:
-            score = silhouette_score(embeddings_reduced[labels != -1], labels[labels != -1])
-        else:
-            score = -1
-        
-        return score
-
-    # Пример использования
-    # embeddings = np.random.rand(1000, 10)  # Пример данных
-    param_grid = {
-        'min_cluster_size': [5, 10, 15, 20, 25, 30, 35, 40, 45, 50, 60, 70, 80, 100, 120, 150, 200, 250, 300],
-        'n_neighbors': [5, 10, 15, 20, 25, 30]
+    print(555666999)
+    
+    return {
+        "html_content": html_content,
+        "full_data": df_join.where(pd.notnull(df_join), None).to_dict(orient='records'),  # Замена NaN на None
+        "aggregated_data": result.where(pd.notnull(result), None).to_dict(orient='records')  # Замена NaN на None
     }
-
-    best_score = float('-inf')
-    best_params = None
-
-    for params in ParameterGrid(param_grid):
-        hdbscan_model = HDBSCAN(min_cluster_size=params['min_cluster_size'])
-        umap_model = UMAP(n_neighbors=params['n_neighbors'])
-        
-        score = score_clustering(embeddings, hdbscan_model, umap_model)
-        
-        if score > best_score:
-            best_score = score
-            best_params = params
-
-
-    def find_best_n_components(embeddings, min_components=2, max_components=10):
-        best_score = -1
-        best_n_components = min_components
-
-        for n_components in range(min_components, max_components + 1):
-            # Применяем UMAP с текущим n_components
-            umap_model = UMAP(n_components=n_components)
-            embeddings_reduced = umap_model.fit_transform(embeddings)
-            
-            # Обучаем HDBSCAN
-            hdbscan_model = HDBSCAN(min_cluster_size=10)
-            hdbscan_model.fit(embeddings_reduced)
-            
-            # Получаем метки кластеров
-            labels = hdbscan_model.labels_
-
-            # Убираем шумовые точки, обозначенные -1
-            if len(set(labels)) > 1:  # Убедимся, что есть хотя бы один кластер
-                score = silhouette_score(embeddings_reduced[labels != -1], labels[labels != -1])
-                if score > best_score:  # Если новая метрика лучше, сохраняем ее
-                    best_score = score
-                    best_n_components = n_components
-
-        return best_n_components, best_score
-
-    def score_clustering(embeddings, min_components=2, max_components=10):
-        # Находим лучшее значение для n_components
-        best_n_components, best_score = find_best_n_components(embeddings, min_components, max_components)
-        print(f"Best n_components: {best_n_components}, Score: {best_score}")
-
-        # Теперь применим UMAP с найденным лучшим значением
-        umap_model = UMAP(n_components=best_n_components)
-        embeddings_reduced = umap_model.fit_transform(embeddings)
-
-        # Создаем и обучаем модель HDBSCAN
-        hdbscan_model = HDBSCAN(min_cluster_size=10)
-        hdbscan_model.fit(embeddings_reduced)
-        
-        # Получаем метки кластеров
-        labels = hdbscan_model.labels_
-
-        # Убираем шумовые точки, обозначенные -1
-        if len(set(labels)) > 1:  # Убедимся, что есть хотя бы один кластер
-            score = silhouette_score(embeddings_reduced[labels != -1], labels[labels != -1])
-        else:
-            score = -1  # В случае отсутствия кластеров или только шумовые точки
-
-        return best_n_components, score
-
-    n_components = score_clustering(embeddings=embeddings)
-    n_components = n_components[0]
-    # print("Лучшие параметры n_components:", n_components)
-    # print("Лучшие параметры:", best_params)
-
-    n_neighbors = best_params['n_neighbors']
-    min_cluster_size = best_params['min_cluster_size'] 
-
-    umap_model = UMAP(n_neighbors=n_neighbors, n_components=5, min_dist=0.0, metric='cosine', random_state=42)
-    hdbscan_model = HDBSCAN(min_cluster_size=min_cluster_size, metric='euclidean', cluster_selection_method='eom', prediction_data=True)
-
-    # Pre-reduce embeddings for visualization purposes
-    reduced_embeddings = UMAP(n_neighbors=n_neighbors, n_components=2, min_dist=0.0, metric='cosine', random_state=42).fit_transform(embeddings)
-
-    # Our text generator
-    generator = transformers.pipeline(
-        model=model, tokenizer=tokenizer,
-        task='text-generation', 
-        temperature=0.2,
-        max_new_tokens=150,
-        # repetition_penalty=1.1
-    )
-
-    # KeyBERT
-    # keybert = KeyBERTInspired()
-
-    # MMR
-    # mmr = MaximalMarginalRelevance(diversity=0.3)
-
-
-    if request.main_prompt == None:
-        main_prompt = """
-        [INST]
-        У меня есть тема, содержащая следующие документы:
-        [DOCUMENTS]
-
-        Тема описывается следующими ключевыми словами: '[KEYWORDS]'.
-
-        Основываясь на информации о теме выше, пожалуйста, создайте краткий заголовок этой темы. Убедитесь, что вы возвращаете только заголовок и ничего больше. Отвечай на русском языке.
-        [/INST]
-        """
-
-    prompt = request.system_prompt + request.example_promt + request.main_prompt
-    # Text generation with Llama 3
-    llama3_2 = TextGeneration(generator, prompt=prompt)
-
-    # All representation models
-    representation_model = {
-        # "KeyBERT": keybert,
-        "Llama3": llama3_2,
-        # "MMR": mmr,
-    }
-
-    topic_model = BERTopic(
-    # Sub-models
-    embedding_model=embedding_model,
-    umap_model=umap_model,
-    hdbscan_model=hdbscan_model,
-    representation_model=representation_model,
-
-    # Hyperparameters
-    top_n_words=10,
-    verbose=True
-    )
-
-    # Train model
-    topics, probs = topic_model.fit_transform(llm_answer, embeddings)
-
-    llama3_labels = [label[0][0].split("\n")[0] for label in topic_model.get_topics(full=True)["Llama3"].values()]
-    topic_model.set_topic_labels(llama3_labels)
-
-    # ################################### Visualize ###################################
-
-    fig = topic_model.visualize_documents(llm_answer, reduced_embeddings=reduced_embeddings, hide_annotations=True, 
-                                    hide_document_hover=False, custom_labels=True)
-
-    # Модифицируйте метки
-    # for trace in fig.data: 
-    #     trace.name = ' '.join(trace.name.split()[:10])  # Оставляем только первые 3 слова в метке
-
-    # Устанавливаем путь к директории файла
-    file_location = f'/home/dev/fastapi/analytics_app/data/{request.user_id}/bertopic_files_directory/{request.folder_name}/'
-
-    # Создание директории, если она не существует
-    os.makedirs(os.path.dirname(file_location), exist_ok=True)
-
-    # Сохранение файла .fig на диск
-    # Формируем новое имя файла с добавлением даты и времени
-    new_filename = f"{indexes[request.index]}_{current_time}.html"
-    fig.write_html(file_location + new_filename)
-
-
-    ###################################### save model #################################
-
-    # Название для сохранения файлов
-    filename = 'topic_model_' + new_filename.split('.html')[0]
-    # print("!!!555!!!+++!!!555!!!")
-    # print(filename)
-    # print(new_filename.split('.html')[0])
-    # print(new_filename)
-
-    st = time.time()
-    elapsed_time = st - et
-    print(elapsed_time)
-    # Получаем целое количество секунд
-    total_seconds = int(elapsed_time)
-
-    # Вычисляем часы
-    hours = total_seconds // 3600
-    # Вычисляем оставшиеся минуты
-    minutes = (total_seconds % 3600) // 60
-    # Вычисляем оставшиеся секунды
-    seconds = total_seconds % 60
-    execution_time =  f"{hours} ч. {minutes} мин. {seconds} сек."
-
-    # Теперь сохраняем темы
-    try:
-        os.chdir(file_location)
-        topic_model.save(filename, serialization="safetensors", save_ctfidf=True, save_embedding_model=embedding_model)
-
-        print(f"Модель успешно сохранена в: {file_location }")
-    except Exception as e:
-        print(f"Ошибка при сохранении модели: {e}")
-
-    # Получение и обработка данных пользователя
-    user_data = redis_db.hgetall(request.user_id)
-
-    if user_data:
-        user_data_decoded = {key.decode('utf-8'): value.decode('utf-8') for key, value in user_data.items()}
-        
-        # Проверка на наличие 'bertopic_files_directory'
-        if "bertopic_files_directory" in user_data_decoded:
-            user_folders = json.loads(user_data_decoded["bertopic_files_directory"])
-        else:
-            user_folders = {}
-
-        # Обработка и сохранение нового результата
-        file_info = {
-            "html-file": f"{indexes[request.index]}_{current_time}.html",
-            "model-file": filename,
-            "creation_date": datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
-            "execution_time": execution_time 
-        }
-
-        folder_name = request.folder_name
-        if folder_name not in user_folders:
-            user_folders[folder_name] = []
-        user_folders[folder_name].append(file_info)
-
-        # Сохранение обратно в Redis
-        redis_db.hset(request.user_id, "bertopic_files_directory", json.dumps(user_folders))
-    else:
-        raise Exception("User data does not exist.")
-
-    return 'Анализ выполнен!'
-
-
-# Эндпойнт для получения текущего прогресса llm-задачи
-@app.get("/progress-llm/{user_id}/{date}/{task_id}")
-async def get_progress(user_id: int, date: str, task_id: str):
-    await asyncio.sleep(0.1)
-
-    # Установка каталога для загрузки данных
-    os.chdir('/home/dev/fastapi/analytics_app/data') 
-
-    # Загрузка словаря истории запросов пользователей
-    try:
-        with open('llm_history_progress.pickle', 'rb') as file:
-            search_history = pickle.load(file)
-    except FileNotFoundError:
-        raise HTTPException(status_code=404, detail="Файл истории запросов не найден.")
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Ошибка при загрузке файла: {str(e)}")
-
-    # Поиск истории для указанного user_id
-    user_history = next((item for item in search_history if item['user_id'] == user_id), None)
-
-    if user_history is None:
-        raise HTTPException(status_code=404, detail="История для данного пользователя не найдена.")
-
-    # Извлечение запросов LLM для заданной даты
-    llm_queries = user_history['values'].get('llm_queries', {}).get(date, None)
-
-    if llm_queries is None:
-        raise HTTPException(status_code=404, detail="Запросы для указанной даты не найдены.")
-
-    # Поиск заданного task_id среди запросов
-    task_progress = next((query for query in llm_queries if task_id in query), None)
-
-    if task_progress is None:
-        raise HTTPException(status_code=404, detail="Запрос с указанным task_id не найден.")
-
-    # Извлечение статуса и прогресса задачи
-    task_info = task_progress[task_id]
-
-    # Формирование ответа
-    response = {
-        "task_id": task_id,
-        "status": task_info['status'],
-        "total_texts": task_info.get('total', 0),
-        "completed_texts": task_info.get('completed', 0),
-        "percent": task_info.get('percent', 0.0)
-    }
-
-    return response
 
 
 # Функция для получения сессии базы данных
@@ -2948,27 +2570,20 @@ async def add_file(user_id: str, folder_name: str, uploaded_file: UploadFile = F
     if not folder_name:
         raise HTTPException(status_code=400, detail="Необходимо указать имя папки")
     
-    # Путь к файлу с темами 
+    # Путь к файлу с темами
     file_path = '/home/dev/fastapi/analytics_app/data/indexes.pkl'
-    # Загрузка словаря с темами
     indexes = load_dict_from_pickle(file_path)
-    # Обновление словаря с темами
+
     # Новая строка для добавления
     new_value = uploaded_file.filename
-    # Найдем следующий ключ
     next_key = max(indexes.keys()) + 1
-
-    # Удаляем .json и переводим в нижний регистр
     formatted_value = new_value.replace('.json', '').lower()
-    # Добавляем новое значение в словарь
     indexes[next_key] = formatted_value
-    # Сохранение словаря с темами
-    save_dict_to_pickle('/home/dev/fastapi/analytics_app/data/indexes.pkl', indexes)
+    save_dict_to_pickle(file_path, indexes)
 
     # Устанавливаем путь к директории файла
     file_location = f'/home/dev/fastapi/analytics_app/data/{user_id}/json_files_directory/{folder_name}/{uploaded_file.filename.lower()}'
-    
-    # Проверка размера загружаемого файла
+
     max_file_size = 10 * 1024 * 1024 * 1024  # 10 GB
     if uploaded_file.size > max_file_size:
         raise HTTPException(
@@ -2976,44 +2591,41 @@ async def add_file(user_id: str, folder_name: str, uploaded_file: UploadFile = F
             detail="Размер файла превышает допустимый предел 10 ГБ"
         )
 
-    # Создание директории, если она не существует
     os.makedirs(os.path.dirname(file_location), exist_ok=True)
 
-    # Проверка существования файла в папке
-    user_folders_data = redis_db.hget(user_id, "json_files_directory")
+    # Проверка существования файла в Redis
+    user_folders_data = await redis_db.hget(user_id, "json_files_directory")
+
     if user_folders_data is None:
         user_folders = {}
     else:
-        user_folders = json.loads(user_folders_data)
+        try:
+            user_folders = json.loads(user_folders_data.decode("utf-8"))
+        except Exception as e:
+            raise HTTPException(
+                status_code=500,
+                detail=f"Ошибка при загрузке данных из Redis: {str(e)}"
+            )
 
-    # Проверка существования файла в папке в Redis
-    if uploaded_file.filename.lower() in user_folders[folder_name]:
-        # Если файл существует, выводим сообщение о его существовании
+    if uploaded_file.filename.lower() in user_folders.get(folder_name, []):
         return f"Файл с именем '{uploaded_file.filename}' уже существует в папке '{folder_name}'."
 
-        # Перезаписываем файл
-        # Обновляем список файлов, добавляя файл заново
-        # user_folders[folder_name].remove(uploaded_file.filename)  # Удаляем старую запись
-        # user_folders[folder_name].append(uploaded_file.filename)   # Добавляем новый файл
-
-        # return f"Файл с именем '{uploaded_file.filename}' успешно перезаписан в папке '{folder_name}'."
-
-    # Сохранение файла на диск
     with open(file_location, "wb+") as file_object:
         shutil.copyfileobj(uploaded_file.file, file_object)
 
-    # Добавляем файл в список
-    user_folders[folder_name].append(uploaded_file.filename.lower())
-    
-    # Сохраняем обновленный список в Redis
-    redis_db.hset(user_id, "json_files_directory", json.dumps(user_folders))
-    
-    # Попытка загрузки файла в Elasticsearch
-    # try:
-    file_loc = f'/home/dev/fastapi/analytics_app/data/{user_id}/json_files_directory/{folder_name}/'
-    load_file_to_elstic(uploaded_file, path=file_loc, next_key=str(next_key))
-    # except Exception as e:
-    #     raise HTTPException(status_code=400, detail="Загрузите, пожалуйста, валидный json из темы мониторинга")
+    user_folders.setdefault(folder_name, []).append(uploaded_file.filename.lower())
+
+    await redis_db.hset(user_id, "json_files_directory", json.dumps(user_folders))
+
+    # Загрузка файла в Elasticsearch
+    try:
+        file_loc = f'/home/dev/fastapi/analytics_app/data/{user_id}/json_files_directory/{folder_name}/'
+        load_file_to_elstic(uploaded_file, path=file_loc, next_key=str(next_key))
+    except Exception as e:
+        raise HTTPException(
+            status_code=400,
+            detail="Загрузите, пожалуйста, валидный json из темы мониторинга"
+        )
 
     return f"Файл {uploaded_file.filename} загружен в папку {folder_name} пользователя - {user_id}!"
 
@@ -3264,7 +2876,7 @@ async def get_user_folders(user_id: str):
     indexes = load_dict_from_pickle(file_path)
     
     # Получаем папки пользователя из Redis
-    folders = redis_db.hgetall(user_id)
+    folders = await redis_db.hgetall(user_id)  # Используем await для асинхронного вызова
 
     if not folders:
         return {"user_id": user_id, "json_files_directory": {}, "bertopic_files_directory": {}}
@@ -3273,7 +2885,7 @@ async def get_user_folders(user_id: str):
     formatted_folders = {folder.decode('utf-8'): json.loads(files) for folder, files in folders.items()}
 
     # Получение данных из Elasticsearch
-    es_indexes = [index for index in es.indices.get('*')] # список всех индексов elastic
+    es_indexes = [index for index in es.indices.get('*')]  # список всех индексов elastic
     es_indexes = [x.strip() for x in es_indexes]
 
     # Запрос для поиска мин и макс дат в данных/файлах
@@ -3319,7 +2931,7 @@ async def get_user_folders(user_id: str):
                 )
 
     # Получаем папки пользователя из Redis для bertopic
-    bertopic_folders = redis_db.hget(user_id, "bertopic_files_directory")
+    bertopic_folders = await redis_db.hget(user_id, "bertopic_files_directory")  # Добавлено await
     
     # Если данные существуют и не пустые, обрабатываем их
     if bertopic_folders is not None:
@@ -3336,8 +2948,8 @@ async def get_user_folders(user_id: str):
     else:
         bertopic_folders = {}
 
-    # Получаем папки пользователя из Redis для bertopic
-    projector_folders = redis_db.hget(user_id, "projector_files_directory")
+    # Получаем папки пользователя из Redis для projector
+    projector_folders = await redis_db.hget(user_id, "projector_files_directory")  # Добавлено await
     
     # Если данные существуют и не пустые, обрабатываем их
     if projector_folders is not None:
@@ -3354,14 +2966,231 @@ async def get_user_folders(user_id: str):
     else:
         projector_folders = {}
 
-    return {"user_id": user_id, "json_files_directory": json_folders, 
-            "bertopic_files_directory": bertopic_folders, "projector_files_directory": projector_folders}
-    
+    return {
+        "user_id": user_id,
+        "json_files_directory": json_folders,
+        "bertopic_files_directory": bertopic_folders,
+        "projector_files_directory": projector_folders,
+    }
+
 
 ###########################################################################################################
 
+# Модель для задачи тестового анализа LLM
+# class AnalysisRequest(BaseModel):
+#     user_id: int
+#     folder_name: str
+#     index: int
+#     min_date: int
+#     max_date: int
+#     query_str: Optional[str] = None
+#     system_prompt: Optional[str] = None
+#     example_text: str  # Текст примера
+#     example_thematics: str  # Тематики в тексте-примере
+#     example_question_keywords: str  # Вопрос для ключевых слов текста
+#     example_keywords: str  # Ключевые слова
+#     example_question: str  # Вопрос
+#     text_ids: List[int]  # Массив идентификаторов текстов
+
+#     def __init__(self, **data):
+#         super().__init__(**data)  # Вызываем родительский конструктор
+#         # Очищаем строковые поля
+#         self.example_text = self.clean_string(self.example_text)
+#         self.example_thematics = self.clean_string(self.example_thematics)
+#         self.example_question_keywords = self.clean_string(self.example_question_keywords)
+#         self.example_keywords = self.clean_string(self.example_keywords)
+#         self.example_question = self.clean_string(self.example_question)
+
+#     @staticmethod
+#     def clean_string(value: str) -> str:
+#         # Удаляем все нежелательные символы (в данном случае управляющие символы)
+#         if value is not None:
+#             # Удаляем неразрешенные управляющие символы
+#             value = re.sub(r'[\u0001-\u001F\u007F-\u009F]', '', value)
+#             # Дополнительно можно экранировать одинарные кавычки
+#             value = value.replace("'", "")
+#         return value
 
 
+# async def run_llm_query(request_data: AnalysisRequest):
+#     await asyncio.sleep(0.01)
+#     et = time.time()
+#     current_time = datetime.now().strftime('%Y%m%d_%H%M%S')
+#     total_texts = 0
+
+#     file_path = '/home/dev/fastapi/analytics_app/data/indexes.pkl'
+#     indexes = load_dict_from_pickle(file_path)
+
+#     # Выполняем поиск текстов
+#     if request_data.query_str is not None and request_data.query_str != '' and request_data.query_str != 'all':
+#         data = elastic_query(theme_index=indexes[request_data.index], query_str=request_data.query_str)
+#     else:
+#         data = elastic_query(theme_index=indexes[request_data.index], query_str='all')
+
+#     # Фильтруем данные по дате
+#     data = [x for x in data if request_data.min_date <= x['timeCreate'] <= request_data.max_date]
+
+#     # Получение текстов по идентификаторам
+#     texts = [x['text'] for x in data]  
+#     texts = [texts[x] for x in request_data.text_ids]# Используем text_ids для фильтрации
+#     total_texts = len(texts)
+
+#     print('Всего текстов: {}'.format(total_texts))
+
+#     tokenizer = AutoTokenizer.from_pretrained("/home/dev/fastapi/analytics_app/data/LLM_models/Meta-Llama-3-8B-Instruct")
+#     bnb_config = transformers.BitsAndBytesConfig(
+#         load_in_4bit=True,
+#         bnb_4bit_quant_type='nf4',
+#         bnb_4bit_use_double_quant=True,
+#         bnb_4bit_compute_dtype=torch.bfloat16
+#     )
+
+#     model = transformers.AutoModelForCausalLM.from_pretrained(
+#         "/home/dev/fastapi/analytics_app/data/LLM_models/Meta-Llama-3-8B-Instruct",
+#         trust_remote_code=True,
+#         quantization_config=bnb_config,
+#         device_map='auto',
+#     )
+
+#     # Проверка значений примера
+#     if not all([
+#         request_data.example_text,
+#         request_data.example_question_keywords,
+#         request_data.example_keywords,
+#         request_data.example_question,
+#         request_data.example_thematics
+#     ]):
+#         raise ValueError("Пожалуйста, убедитесь, что все поля примеров заполнены корректно.")
+
+#     # Формируем system_prompt
+#     if request_data.system_prompt is None or request_data.system_prompt == "":
+#         request_data.system_prompt = """
+#             <s>[INST] <<SYS>>
+#             You are a helpful, respectful and honest assistant for labeling topics.
+#             <</SYS>>
+#             """
+
+#     request_data.system_prompt = f"""
+#     <s>[INST] <<SYS>>
+#     {request_data.system_prompt}
+#     <</SYS>>"""
+
+#     # Формируем example_prompt
+#     example_prompt = f"""
+#         У меня есть следующий текст:
+#         {request_data.example_text}
+
+#         {request_data.example_question_keywords}: {request_data.example_keywords}.
+
+#         {request_data.example_question}
+
+#         [/INST] {request_data.example_thematics}
+#         """
+
+#     pipe = pipeline(
+#         model=model,
+#         tokenizer=tokenizer,
+#         task='text-generation',
+#         temperature=0.1,
+#         max_new_tokens=500,
+#         repetition_penalty=1.1,
+#     )
+#     # Установите pad_token_id
+#     pipe.tokenizer.pad_token_id = pipe.model.config.eos_token_id 
+
+#     # Основной промт с заменами промтов
+#     llm_answer = []
+#     processed_texts = {}
+
+#     def check_similarity_and_process(single_text, threshold=0.8):
+#         if single_text in processed_texts:
+#             return processed_texts[single_text]
+
+#         df_meta = pd.DataFrame({'text': [single_text]})
+
+#         if len(processed_texts) > 0:
+#             df_existing = pd.DataFrame(list(processed_texts.keys()), columns=['text'])
+#             combined_df = pd.concat([df_meta, df_existing], ignore_index=True)
+
+#             count_vectorizer = CountVectorizer()
+#             vector_matrix = count_vectorizer.fit_transform(combined_df['text'].values)
+#             cosine_similarity_matrix = cosine_similarity(vector_matrix)
+
+#             for i in range(len(cosine_similarity_matrix)):
+#                 cosine_similarity_matrix[i][i] = 0
+
+#             similar_indices = np.where(cosine_similarity_matrix[0] >= threshold)[0]
+#             if len(similar_indices) > 0:
+#                 return processed_texts[combined_df.iloc[similar_indices[0]]['text']]
+
+#         messages = [
+#             {
+#                 "role": "system",
+#                 "content": f"{request_data.system_prompt} {' '} {example_prompt} У меня есть следующий текст: {single_text} {request_data.example_question_keywords}: {request_data.example_keywords}. {request_data.example_question}"
+#             }
+#         ]
+
+#         torch.cuda.empty_cache()
+
+#         with torch.no_grad():
+#             response = pipe(messages, num_return_sequences=1)
+
+#         result_text = response[0]['generated_text'][1]['content'].replace('[/INST]\n', '').replace('\n', '')
+#         processed_texts[single_text] = result_text
+#         return result_text
+
+#     for i in range(total_texts):
+#         single_text = texts[i]
+
+#         if len(single_text) < 15000:
+#             await asyncio.sleep(0.01)
+#             answer = check_similarity_and_process(single_text)
+#             llm_answer.append(answer)
+#         else:
+#             llm_answer.append('Длинный текст')
+
+#     return llm_answer
+
+
+# @app.post("/llm-test/")
+# async def llm_run_test(background_tasks: BackgroundTasks, user_id: int, folder_name: str, index: int,
+#                        min_date: int, max_date: int,
+#                        query_str: Optional[str] = None,
+#                        system_prompt: Optional[str] = None,
+#                        example_text: str = None,
+#                        example_question_keywords: str = None,
+#                        example_keywords: str = None,
+#                        example_thematics: str = None,
+#                        example_question: str = None,
+#                        text_ids: List[int] = []):  # Новый параметр text_ids
+#     try:
+#         request_data = AnalysisRequest(
+#             user_id=user_id,
+#             folder_name=folder_name,
+#             index=index,
+#             min_date=min_date,
+#             max_date=max_date,
+#             query_str=query_str,
+#             system_prompt=system_prompt,
+#             example_text=example_text,
+#             example_thematics=example_thematics,
+#             example_question_keywords=example_question_keywords,
+#             example_keywords=example_keywords,
+#             example_question=example_question,
+#             text_ids=text_ids  # Передаем идентификаторы текстов
+#         )
+
+#         llm_answers = await run_llm_query(request_data)
+#         return {"llm_answers": llm_answers}
+#     except ValidationError as e:
+#         return {"error": str(e)}
+
+
+########################################### Celery ###############################################
+
+
+
+########################################### Celery End ###############################################
 
 if __name__ == "__main__":
-    uvicorn.run("main:app", host="0.0.0.0", port=5001, reload=True) 
+    uvicorn.run("main:app", host="0.0.0.0", port=5001, reload=True)

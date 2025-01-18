@@ -38,8 +38,9 @@ from bertopic.representation import KeyBERTInspired, MaximalMarginalRelevance, T
 ################################### data ###################################
 et = time.time()
 
-filename = 'Alter_SMI_01.12.2024-03.01.2025.json'
-os.chdir('/home/dev/fastapi/analytics_app/data/json_files/adsad/')
+os.chdir('/home/dev/fastapi/analytics_app/data/6/json_files_directory/Cyber/')
+filename = 'kibersport_01.01.2024-31.12.2024.json'
+
 with io.open(filename, encoding='utf-8', mode='r') as train_file:
     dict_train = json.load(train_file, strict=False)
 
@@ -111,7 +112,7 @@ llm_answer = []
 
 count = 0
 # Проходим через каждый текст по отдельности
-for i in tqdm(range(len(texts[:50]))):
+for i in tqdm(range(len(texts[:300]))):
     single_text = texts[i]
 
     if len(single_text) < 15000:
@@ -321,8 +322,10 @@ fig = topic_model.visualize_documents(llm_answer, reduced_embeddings=reduced_emb
 # for trace in fig.data:
 #     trace.name = ' '.join(trace.name.split()[:10])  # Оставляем только первые 3 слова в метке
 
+print(555777999)
+print(filename)
 os.chdir('/home/dev/fastapi/analytics_app/data/html_files')
-fig.write_html("/home/dev/fastapi/analytics_app/data/html_files/" + filename.split('.json')[0] + '.html')
+fig.write_html(filename.split('.json')[0] + '.html')
 
 ###################################### save model #################################
 
@@ -362,10 +365,10 @@ except Exception as e:
     print(f"Ошибка при сохранении модели: {e}")
 
 
-# os.chdir('/home/dev/fastapi/analytics_app/data/html_files')
-# # Сохранение списка в файл с помощью pickle
-# with open('my_list.pkl', 'wb') as file:
-#     pickle.dump(llm_answer, file)
+os.chdir('/home/dev/fastapi/analytics_app/data/html_files')
+# Сохранение списка в файл с помощью pickle
+with open('my_list_llm_ans.pkl', 'wb') as file:
+    pickle.dump(llm_answer, file)
 
 st = time.time()
 elapsed_time = st - et
