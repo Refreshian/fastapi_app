@@ -1982,21 +1982,6 @@ async def create_data_projector(user_id: str, folder_name: str, file_name: str):
     return f"Файлы авторов для прожектора темы {file_name} созданы и сохранены в папку {folder_name}!"
 
 
-# @app.get("/projector-files")
-# async def projector_files() -> ModelDataFolder:
-
-#     folders = '/home/dev/fastapi/analytics_app/data/projector_files'
-#     sub_folders = [name for name in os.listdir(folders) if os.path.isdir(os.path.join(folders, name))]
-
-#     data_values = []
-#     os.chdir(folders)
-#     for i in range(len(sub_folders)):
-#         data_values.append({"name": sub_folders[i], 
-#                             "values": [f for f in listdir(sub_folders[i]) if isfile(join(sub_folders[i], f))]}) 
-    
-#     return ModelDataFolder(values=data_values)
-
-
 @app.get('/file-load/{user_id}/{file_type}/{folder_name}/{file_name}')
 def load_file(user_id: str, file_type: str, folder_name: str, file_name: str):
     # Логируем параметры запроса для отладки
@@ -2883,6 +2868,9 @@ async def get_user_folders(user_id: str):
     
     # Преобразуем данные из Redis в формат JSON
     formatted_folders = {folder.decode('utf-8'): json.loads(files) for folder, files in folders.items()}
+
+    print(555666777)
+    print(formatted_folders)
 
     # Получение данных из Elasticsearch
     es_indexes = [index for index in es.indices.get('*')]  # список всех индексов elastic

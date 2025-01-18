@@ -49,8 +49,7 @@ async def run_llm_query(task_data: dict):
     try:
         await asyncio.sleep(0.01)
         current_time = datetime.now().strftime('%Y%m%d_%H%M%S')
-        # print(555)        
-        # print(task_data)
+
         # Загружаем данные индекса
         file_path = '/home/dev/fastapi/analytics_app/data/indexes.pkl'
         indexes = load_dict_from_pickle(file_path)
@@ -72,7 +71,7 @@ async def run_llm_query(task_data: dict):
         # Получаем тексты и ограничиваем их количество
         et = time.time()
         texts = [x['text'] for x in data]
-        texts = texts[:1000]  # Ограничение
+        texts = texts[:50]  # Ограничение
         total_texts = len(texts)
 
         # Обновляем начальный статус задачи в Redis
@@ -143,7 +142,7 @@ async def run_llm_query(task_data: dict):
         completed_texts = 0
 
         # Генерация заголовков
-        for i in tqdm(range(len(texts))):
+        for i in range(len(texts)):
             single_text = texts[i]
 
             if len(single_text) < 15000:
@@ -301,51 +300,60 @@ async def run_llm_query(task_data: dict):
         except Exception as e:
             print(f"Ошибка при сохранении модели: {e}")
 
+        # Сохранение тематик llm_labels
+        os.chdir(file_location)
+        with open(f'my_list_llm_ans_{indexes[int(task_data['index'])]}_{current_time}.pkl', 'wb') as file:
+            pickle.dump(llm_labels, file)
+
         # Получение и обработка данных пользователя
         user_data = await redis_db.execute_command('HGETALL', task_data['user_id'])
         # Если данные возвращаются в формате 'dict' с байтовыми строками, декодируйте их
-        user_data_decoded = {key.decode('utf-8'): value.decode('utf-8') for key, value in user_data.items()}
-        print(user_data_decoded)
-        print(11999111)
+        user_data = {key.decode('utf-8'): value.decode('utf-8') for key, value in user_data.items()}
 
+        # Преобразование строки в объект datetime
+        creation_date = datetime.strptime(current_time, "%Y%m%d_%H%M%S")
+
+        # Обработка и сохранение нового результата
+        file_info = {
+            "html-file": f"{indexes[int(task_data['index'])]}_{current_time}.html",
+            "model-file": filename,
+            "creation_date": str(creation_date.strftime("%Y-%m-%d %H:%M:%S")),  # Преобразование в формат строки
+            "execution_time": execution_time,
+            "query_str": task_data['query_str'], 
+            "min_date": task_data['min_date'],
+            "max_date": task_data['max_date'],
+            "index_number": int(task_data['index']),
+            "task_id": task_data['task_id']
+        }
+
+        # Проверяем данные пользователя
         if user_data:
-            # user_data_decoded = {key.decode('utf-8'): value.decode('utf-8') for key, value in user_data.items()}
-            
-            # Проверка на наличие 'bertopic_files_directory'
+            # Проверка на наличие ключа bertopic_files_directory
             if "bertopic_files_directory" in user_data:
+                # Если ключ bertopic_files_directory существует — загружаем его содержимое
                 user_folders = json.loads(user_data["bertopic_files_directory"])
             else:
+                # Если ключа нет — создаём пустой словарь
                 user_folders = {}
 
-            # Преобразование строки в объект datetime
-            creation_date = datetime.strptime(current_time, "%Y%m%d_%H%M%S")
+            # Проверяем существование папки, переданной в task_data['folder_name']
+            folder_name = task_data['folder_name']
+            if folder_name in user_folders:
+                # Если папка существует, добавляем новый file_info в уже имеющийся список
+                user_folders[folder_name].append(file_info)
+            else:
+                # Если папка не существует, создаём её и добавляем file_info в список
+                user_folders[folder_name] = [file_info]
 
-            # Обработка и сохранение нового результата
-            file_info = {
-                "html-file": f"{indexes[int(task_data['index'])]}_{current_time}.html",
-                "model-file": filename,
-                "creation_date": str(creation_date.strftime("%Y-%m-%d %H:%M:%S")),  # Преобразование в формат строки
-                "execution_time": execution_time,
-                "query_str": task_data['query_str'], 
-                "min_date": task_data['min_date'],
-                "max_date": task_data['max_date'],
-                "index_number": int(task_data['index']),
-                "task_id": task_data['task_id']
-            }
+            # Сериализуем обновлённый объект папок (user_folders) в JSON
+            serialized_folders = json.dumps(user_folders)
 
-
-            # Сохранение тематик llm_labels
-            os.chdir(file_location)
-            with open(f'my_list_llm_ans_{indexes[int(task_data['index'])]}_{current_time}.pkl', 'wb') as file:
-                pickle.dump(llm_labels, file)
-
-            # Сохранение в Redis
-            await redis_db.hset(task_data['user_id'], "bertopic_files_directory", json.dumps(file_info))
+            # Сохраняем обновлённые данные в Redis
+            await redis_db.hset(task_data["user_id"], "bertopic_files_directory", serialized_folders)
         else:
+            # Если данных пользователя нет, выбрасываем исключение
             raise Exception("User data does not exist.")
 
-        return 'Анализ выполнен!'
-    
     except:
            logging.error(f"Ошибка в run_llm_query: {e}")
            # Возможно, обновление статуса задачи на 'failed'
