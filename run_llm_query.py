@@ -71,7 +71,7 @@ async def run_llm_query(task_data: dict):
         # Получаем тексты и ограничиваем их количество
         et = time.time()
         texts = [x['text'] for x in data]
-        texts = texts[:50]  # Ограничение
+        texts = texts[:100000]  # Ограничение
         total_texts = len(texts)
 
         # Обновляем начальный статус задачи в Redis

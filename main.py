@@ -1,5 +1,6 @@
 import ast
 import asyncio
+import subprocess
 from datetime import datetime
 from enum import Enum
 import gc
@@ -12,6 +13,8 @@ from collections import ChainMap, defaultdict
 import time
 from os import listdir
 from os.path import isfile, join
+
+import psutil
 from fastapi.security import OAuth2PasswordBearer
 from fastapi.staticfiles import StaticFiles
 from starlette.responses import FileResponse
@@ -103,6 +106,7 @@ from pathlib import Path
 from PIL import Image
 import joblib  # import pickle
 import tensorflow as tf
+from prometheus_fastapi_instrumentator import Instrumentator
 
 
 # os.environ["PYTORCH_CUDA_ALLOC_CONF"] = "max_split_size_mb:50"
@@ -117,7 +121,6 @@ SECRET_KEY = "SECRET"
 ALGORITHM = "HS256"  # Указание алгоритма
 
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="token")
-
 
 import logging
 # Настройка логирования для записи в файл
@@ -134,13 +137,12 @@ es = Elasticsearch(
     port=9200
 )
 
-
 path_json_files = '/home/dev/fastapi/fastapi_app/data/json_files'
 
 app = FastAPI(
     title="Analytics App"
 )
-
+Instrumentator().instrument(app).expose(app)
 
 # app.add_middleware(
 #     CORSMiddleware,
@@ -514,7 +516,7 @@ def load_dict_from_pickle(file_name):
         return None
 
 
-@app.get("/tonality_landscape")# user: User = Depends(current_user),
+@app.get("/tonality_landscape", tags=['data analytics'])# user: User = Depends(current_user),
 async def tonality_landscape(
     
     index: int = None, 
@@ -725,7 +727,7 @@ def process_authors_data(authors_hub):
     return authors_list
 
 
-@app.get('/information_graph')
+@app.get('/information_graph', tags=['data analytics'])
 async def information_graph(index: int=None, 
                              min_date: int=None, max_date: int=None, query_str: Optional[str] = 'карта', 
                              post: Optional[bool] = None, repost: Optional[bool] = None, 
@@ -1049,7 +1051,7 @@ async def themes_analize(user: User = Depends(current_user), index: int =None,
     return ThemesModel(values=fin_data)
 
 
-@app.get("/voice")
+@app.get("/voice", tags=['data analytics'])
 async def voice_analize(user: User = Depends(current_user), index: int = None, 
                              min_date: int=None, max_date: int=None, query_str: str = None) -> ModelVoice:
     # Путь к файлу с темами 
@@ -1155,7 +1157,7 @@ async def voice_analize(user: User = Depends(current_user), index: int = None,
     return ModelVoice(__root__ = values)
 
 
-@app.get("/media-rating")
+@app.get("/media-rating", tags=['data analytics'])
 def media_rating(user: User = Depends(current_user), index: int = None, min_date: int=None,  
                  max_date: int=None) -> MediaRatingModel:
     
@@ -1496,7 +1498,7 @@ def media_rating(user: User = Depends(current_user), index: int = None, min_date
     return MediaRatingModel(first_graph=values['first_graph'], second_graph=values['second_graph'])
 
 
-@app.get('/ai-analytics')
+@app.get('/ai-analytics', tags=['ai analytics'])
 async def ai_analytics_get(index: int=None, min_date: int=None, max_date: int=None) -> ModelAiAnalytics: 
     
     # Путь к файлу с темами 
@@ -1597,7 +1599,7 @@ class CompetitorsModel(BaseModel):
     third_graph: List[ThirdGraphCompetitor]
 
 
-@app.post('/competitors', response_model=CompetitorsModel)
+@app.post('/competitors', response_model=CompetitorsModel, tags=['data analytics'])
 async def competitors(query: QueryCompetitors):
     # Путь к файлу с темами
     file_path = '/home/dev/fastapi/analytics_app/data/indexes.pkl'
@@ -1794,6 +1796,8 @@ async def create_data_projector(user_id: str, folder_name: str, file_name: str):
     file_path = '/home/dev/fastapi/analytics_app/data/indexes.pkl'
     indexes = load_dict_from_pickle(file_path)
 
+    # Отключаем использование GPU
+    os.environ["CUDA_VISIBLE_DEVICES"] = "-1"
     embed = hub.load("/home/dev/fastapi/analytics_app/data/embed_files/universal-sentence-encoder-multilingual_3")
 
     # Полный путь к файлу
@@ -1904,11 +1908,14 @@ async def create_data_projector(user_id: str, folder_name: str, file_name: str):
     # Обработка по партиям
     batch_size = 8
     embeddings = []
+    
     for i in range(0, len(sent_ru), batch_size):
+        await asyncio.sleep(0.01)
         batch = sent_ru[i:i + batch_size]
+        # Для надежности оборачиваем выполнение на CPU
         with tf.device('/CPU:0'):
             embeddings.append(embed(batch))
-
+    
     # Объединение эмбеддингов в один массив
     embeddings = tf.concat(embeddings, axis=0)
 
@@ -1953,6 +1960,8 @@ async def create_data_projector(user_id: str, folder_name: str, file_name: str):
 
     # Сохранение данных о папке и файлах в Redis
     user_data = await redis_db.hgetall(user_id)
+    # Если данные возвращаются в формате 'dict' с байтовыми строками, декодируйте их
+    user_data = {key.decode('utf-8'): value.decode('utf-8') for key, value in user_data.items()}
 
     if not user_data:  # Проверяем, есть ли данные
         raise Exception("User data does not exist.")
@@ -1970,14 +1979,45 @@ async def create_data_projector(user_id: str, folder_name: str, file_name: str):
         "creation_date": timestamp
     }
 
-    # Добавляем новый файл в соответствующую папку
-    if folder_name not in user_folders:
-        user_folders[folder_name] = []
+    # Проверяем данные пользователя
+    if user_data:
+        # Проверка на наличие ключа bertopic_files_directory
+        if "projector_files_directory" in user_data:
+            print(111)
+            # Если ключ bertopic_files_directory существует — загружаем его содержимое
+            user_folders = json.loads(user_data["projector_files_directory"])
+        else:
+            print(222)
+            # Если ключа нет — создаём пустой словарь
+            user_folders = {}
 
-    user_folders[folder_name].append(file_info)
+        # Проверяем существование папки, переданной в user_data['folder_name']
+        if folder_name in user_folders:
+            print(333)
+            # Если папка существует, добавляем новый file_info в уже имеющийся список
+            user_folders[folder_name].append(file_info)
+        else:
+            # Если папка не существует, создаём её и добавляем file_info в список
+            print(444)
+            user_folders[folder_name] = [file_info]
 
-    # Сохраняем обновленные данные обратно в Redis
-    await redis_db.hset(user_id, "projector_files_directory", json.dumps(user_folders))
+        # Сериализуем обновлённый объект папок (user_folders) в JSON
+        serialized_folders = json.dumps(user_folders)
+
+        # Сохраняем обновлённые данные в Redis
+        await redis_db.hset(user_id, "projector_files_directory", serialized_folders)
+    else:
+        # Если данных пользователя нет, выбрасываем исключение
+        raise Exception("User data does not exist.")
+
+    # # Добавляем новый файл в соответствующую папку
+    # if folder_name not in user_folders:
+    #     user_folders[folder_name] = []
+
+    # user_folders[folder_name].append(file_info)
+
+    # # Сохраняем обновленные данные обратно в Redis
+    # await redis_db.hset(user_id, "projector_files_directory", json.dumps(user_folders))
 
     return f"Файлы авторов для прожектора темы {file_name} созданы и сохранены в папку {folder_name}!"
 
@@ -2151,9 +2191,14 @@ import redis.asyncio
 async def startup_event():
     try:
         await redis_db.ping()
-        print("Redis подключен!")
+        logging.info("Redis подключен!")
+        # Инициализируем статус GPU при старте
+        existing_status = await redis_db.get("gpu:status")
+        if not existing_status:
+            logging.info("Инициализация статуса GPU как 'idle'.")
+            await redis_db.set("gpu:status", "idle")
     except Exception as e:
-        print(f"Ошибка подключения к Redis: {e}")
+        logging.error(f"Ошибка подключения к Redis: {e}")
         raise RuntimeError("Не удалось подключиться к Redis")
 
 
@@ -2162,12 +2207,15 @@ async def shutdown_event():
     await redis_db.close()
 
 
-# Проверка статуса GPU
-@app.get("/is_gpu_busy")
+@app.get("/is_gpu_busy", tags=['metrics'])
 async def is_gpu_busy() -> bool:
     try:
         status = await redis_db.get("gpu:status")
-        return status == b"busy"  # Redis возвращает данные в виде байт
+        if status is None:
+            logging.warning("Ключ gpu:status отсутствует в Redis.")
+        else:
+            logging.info(f"Текущий статус GPU из Redis: {status}")
+        return status == b"busy"
     except Exception as e:
         logging.error(f"Ошибка при проверке статуса GPU: {e}")
         return False
@@ -2185,7 +2233,7 @@ async def reset_gpu_status():
 
 
 # Обработка LLM задач
-@app.post("/llm-run/")
+@app.post("/llm-run/", tags=['ai analytics'])
 async def llm_run(
     analysis_request: AnalysisRequest,
     background_tasks: BackgroundTasks
@@ -2232,14 +2280,25 @@ async def llm_run(
 
         if not saved_task:
             raise Exception(f"Ошибка сохранения данных для задачи {task_id}!") 
+        
+        # await redis_db.set("gpu:status", "idle")  # Для теста, явно сбрасываем статус
+        # status = await redis_db.get("gpu:status")
+        # logging.info(f"Сбрасываем статус GPU: {status.decode('utf-8') if status else 'ключ отсутствует'}")
 
         # Проверяем статус GPU
         if not await is_gpu_busy():
+            logging.info("GPU свободен, запускаем задачу...")
             await set_gpu_status("busy")
+            queue_length = await redis_db.llen("queue:tasks")
+            logging.info(f"Длина очереди задач: {queue_length}")
             next_task_id = await redis_db.lpop("queue:tasks")
             if next_task_id:
-                # Добавляем задачу в фоновое выполнение
+                logging.info(f"Следующая задача: {next_task_id.decode('utf-8')}")
                 background_tasks.add_task(process_task, next_task_id, decoded_task)
+            else:
+                logging.warning("Очередь задач пуста.")
+        else:
+            logging.info("GPU занят, задача поставлена в очередь.")
 
         return {"message": "Задача добавлена в очередь", "task_id": task_id, "status": "pending"}
 
@@ -2250,6 +2309,7 @@ async def llm_run(
 
 async def process_task(task_id: str, task_data: dict):
     try:
+        print(5556667)
         logging.info(f"Начата обработка задачи: {task_id}")
 
         # Убедимся, что task_id - в строковом формате
@@ -2297,7 +2357,7 @@ async def process_task(task_id: str, task_data: dict):
         logging.info(f"GPU статус сброшен. Задача {task_id} завершена.")
 
 
-@app.get("/status/{task_id}")
+@app.get("/status/{task_id}", tags=['ai analytics'])
 async def get_task_status(task_id: str):
     # Ожидаем асинхронный вызов метода hgetall
     task_data = await redis_db.hgetall(f"task:{task_id}")
@@ -2307,13 +2367,13 @@ async def get_task_status(task_id: str):
         raise HTTPException(status_code=404, detail="Задача не найдена")
 
     # Функция возвращает данные в удобном формате
-    return task_data
+    return task_data 
 
 
-@app.get("/llm-analyze")
+@app.get("/llm-analyze", tags=['ai analytics'])
 async def llm_analyze(user_id: int, folder_name: str, file_name: str):
     # Получаем данные пользователя из Redis
-    user_data = redis_db.hgetall(user_id)
+    user_data = await redis_db.hgetall(user_id)
     
     # Преобразование байтовых строк в обычные строки
     user_data = {key.decode('utf-8'): value.decode('utf-8') for key, value in user_data.items()}
@@ -2429,8 +2489,6 @@ async def llm_analyze(user_id: int, folder_name: str, file_name: str):
     # Возвращение HTML файла и таблиц
     with open(html_file_path, 'r', encoding='utf-8') as file:
         html_content = file.read()
-
-    print(555666999)
     
     return {
         "html_content": html_content,
@@ -2478,7 +2536,7 @@ def get_user_profile(current_user: User = Depends(get_current_user)):
     return current_user
 
 
-@app.get("/history_llm_search/{user_id}")
+@app.get("/history_llm_search/{user_id}", tags=['data & folders'])
 async def history_search(user_id: int):
 
     os.chdir('/home/dev/fastapi/analytics_app/data')
@@ -2513,7 +2571,7 @@ async def history_search(user_id: int):
 ############################## Хранение данных о файлах и папках пользователей в Redis ####################
 
 # Добавление папки
-@app.get("/add-folder/{user_id}/{folder_name}")
+@app.get("/add-folder/{user_id}/{folder_name}", tags=['data & folders'])
 async def add_folder(user_id: str, folder_name: str):
     # Путь до директории json_files
     json_files_directory = f"/home/dev/fastapi/analytics_app/data/{user_id}/json_files_directory"
@@ -2549,7 +2607,7 @@ async def add_folder(user_id: str, folder_name: str):
 
 
 # Добавление файла в папку
-@app.post("/add-file/{user_id}/{folder_name}")
+@app.post("/add-file/{user_id}/{folder_name}", tags=['data & folders'])
 async def add_file(user_id: str, folder_name: str, uploaded_file: UploadFile = File(...)):
     # Проверка, что folder_name предоставлен
     if not folder_name:
@@ -2616,10 +2674,10 @@ async def add_file(user_id: str, folder_name: str, uploaded_file: UploadFile = F
 
 
 # Удаление папки
-@app.delete("/delete-folder/{user_id}/{directory_type}/{folder_name}")
+@app.delete("/delete-folder/{user_id}/{directory_type}/{folder_name}", tags=['data & folders'])
 async def delete_folder(user_id: str, directory_type: str, folder_name: str):
     # Получаем текущее содержимое для указанного пользователя
-    json_folders = redis_db.hget(user_id, directory_type)
+    json_folders = await redis_db.hget(user_id, directory_type)
     
     # Если данных для данного user_id нет, возвращаем ошибку
     if json_folders is None:
@@ -2637,7 +2695,7 @@ async def delete_folder(user_id: str, directory_type: str, folder_name: str):
 
     # Удаляем папку из Redis
     del folders_dict[folder_name]  # Удаляем папку из словаря
-    redis_db.hset(user_id, directory_type, json.dumps(folders_dict))  # Обновляем данные в Redis
+    await redis_db.hset(user_id, directory_type, json.dumps(folders_dict))  # Обновляем данные в Redis
 
     # Получаем список всех индексов для удаления из Elasticsearch
     es_indexes = [index for index in es.indices.get('*')]
@@ -2673,10 +2731,10 @@ async def delete_folder(user_id: str, directory_type: str, folder_name: str):
 
 
 # Удаление файла
-@app.delete("/delete-file/{user_id}/{directory_type}/{directory_name}/{file_name}")
+@app.delete("/delete-file/{user_id}/{directory_type}/{directory_name}/{file_name}", tags=['data & folders'])
 async def delete_file(user_id: str, directory_type: str, directory_name: str, file_name: str):
     # Получаем директории для указанного user_id
-    folders = redis_db.hgetall(user_id)
+    folders = await redis_db.hgetall(user_id)
     # Преобразуем байтовые строки в обычные строки и десериализуем JSON
     folders = {key.decode('utf-8'): json.loads(value.decode('utf-8')) for key, value in folders.items()}
 
@@ -2696,7 +2754,7 @@ async def delete_file(user_id: str, directory_type: str, directory_name: str, fi
                 # Ищем и удаляем словарь с необходимими файлами
                 updated_schools = [item for item in schools_data[directory_name] if item != file_name + '.json']
                 schools_data[directory_name] = updated_schools
-                redis_db.hset(user_id, "json_files_directory", json.dumps(schools_data))
+                await redis_db.hset(user_id, "json_files_directory", json.dumps(schools_data))
 
             # Удаляем файл из файловой системы
             os.remove(os.path.join(folder_path, file_name + '.json'))
@@ -2717,7 +2775,7 @@ async def delete_file(user_id: str, directory_type: str, directory_name: str, fi
                 # Ищем и удаляем словарь с необходимым файлом
                 updated_schools = [item for item in schools_data[directory_name] if item.get("html-file") != file_name]
                 schools_data[directory_name] = updated_schools
-                redis_db.hset(user_id, "bertopic_files_directory", json.dumps(schools_data))
+                await redis_db.hset(user_id, "bertopic_files_directory", json.dumps(schools_data))
 
             # Удаляем файлы
             file_pattern = os.path.join(folder_path, f"*{search_string}*")
@@ -2747,15 +2805,54 @@ async def delete_file(user_id: str, directory_type: str, directory_name: str, fi
                             search_string in entry.get('txt-file', ''))
                 ]
                 schools_data[directory_name] = updated_schools
-                redis_db.hset(user_id, "projector_files_directory", json.dumps(schools_data))
+                await redis_db.hset(user_id, "projector_files_directory", json.dumps(schools_data))
 
-            # Удаляем файл и директорию с projector
-            file_pattern = os.path.join(folder_path, f"*{search_string}*")
-            for f in glob.glob(file_pattern):
-                if os.path.isdir(f):
-                    shutil.rmtree(f)
-                else:
-                    os.remove(f)
+            # Удаляем файлы (tsv + txt) из папки projector
+            def extract_search_string(base_file_path):
+                """
+                Извлекает search_string из полного имени файла.
+                Например:
+                    Вход: '/home/dev/fastapi/analytics_app/data/123/projector/folder/geekbrains_08.12.2024-07.01.2025_authors_point_2025-01-10_09-09-48.tsv'
+                    Выход: '2025-01-10_09-09-48'
+                """
+                # Берем только имя файла без пути
+                file_name = os.path.basename(base_file_path)
+                
+                # Ищем search_string с помощью регулярного выражения
+                match = re.search(r'\d{4}-\d{2}-\d{2}_\d{2}-\d{2}-\d{2}', file_name)
+                if match:
+                    return match.group(0)
+                return None
+
+
+            def remove_related_files(base_file_path):
+                """
+                Удаляет файлы, которые содержат тот же search_string в имени, что и базовый файл.
+                """
+                # Извлекаем путь папки, где лежит файл
+                folder_path = os.path.dirname(base_file_path)
+                
+                # Извлекаем search_string из имени базового файла
+                search_string = extract_search_string(base_file_path)
+                if not search_string:
+                    print("Не удалось извлечь search_string из пути:", base_file_path)
+                    return
+                
+                # Шаблон для поиска файлов с теми же датами
+                file_pattern = os.path.join(folder_path, f"*{search_string}*")
+                
+                # Удаляем файлы с совпадающим search_string
+                for f in glob.glob(file_pattern):
+                    try:
+                        if os.path.isdir(f):
+                            shutil.rmtree(f)
+                        else:
+                            os.remove(f)
+                            print(f"Удален файл: {f}")
+                    except Exception as e:
+                        print(f"Ошибка при удалении {f}: {e}")
+
+            remove_related_files(folder_path + '/' + file_name)
 
             return {"message": f"Все файлы, содержащие {search_string}, из директории {directory_name} были успешно удалены!"}
         except Exception as e:
@@ -2847,7 +2944,7 @@ async def delete_file(user_id: str, directory_type: str, directory_name: str, fi
 
 
 # Эндпойнт получения папок и файлов для пользователя с данными из Elasticsearch
-@app.get("/user-folders/{user_id}")
+@app.get("/user-folders/{user_id}", tags=['data & folders'])
 async def get_user_folders(user_id: str):
     # Проверяем, существует ли пользователь в БД
     user = get_user_profile(user_id)
@@ -2868,9 +2965,6 @@ async def get_user_folders(user_id: str):
     
     # Преобразуем данные из Redis в формат JSON
     formatted_folders = {folder.decode('utf-8'): json.loads(files) for folder, files in folders.items()}
-
-    print(555666777)
-    print(formatted_folders)
 
     # Получение данных из Elasticsearch
     es_indexes = [index for index in es.indices.get('*')]  # список всех индексов elastic
@@ -3174,11 +3268,91 @@ async def get_user_folders(user_id: str):
 #         return {"error": str(e)}
 
 
-########################################### Celery ###############################################
+########################################### Monitoring ###############################################
+
+@app.get("/gpu_metrics", tags=['metrics'])
+async def get_gpu_metrics():
+    try:
+        result = subprocess.run(['nvidia-smi', '--query-gpu=utilization.gpu,memory.used,memory.free', '--format=csv,noheader,nounits'], 
+                                stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        output = result.stdout.decode('utf-8').strip().split('\n')
+        gpu_data = [line.split(', ') for line in output]
+        return {"gpu_metrics": gpu_data}
+    except Exception as e:
+        return {"error": str(e)}
+
+@app.get("/server_metrics", tags=['metrics'])
+async def get_metrics():
+    cpu_usage = psutil.cpu_percent(interval=1)
+    memory_info = psutil.virtual_memory()
+    return {
+        "cpu_usage": cpu_usage,
+        "memory_usage": memory_info.percent,
+        "total_memory": memory_info.total,
+        "available_memory": memory_info.available,
+    }
+
+########################################### Monitoring End ###############################################
+
+
+########################################### Grafana Prometheus ###############################################
+
+# import asyncpg
+# # ---------- Подключение PostgreSQL ----------
+# instrumentator = Instrumentator(
+#     should_group_status_codes=False,  # Группировка кодов ответов, при необходимости
+#     should_ignore_untemplated=True    # Игнорировать пути без шаблонов
+# )
+# instrumentator.instrument(app).expose(app)
+
+# # ---------- Настройка PostgreSQL ----------
+# DB_CONFIG = {
+#     "user": "postgres",
+#     "password": "ffsfds&fdv12w",
+#     "database": "datadb",
+#     "host": "localhost",
+#     "port": "5432",
+# }
+
+# postgres_pool = None
+
+# @app.on_event("startup")
+# async def startup():
+#     global postgres_pool
+#     postgres_pool = await asyncpg.create_pool(**DB_CONFIG)
+
+# @app.on_event("shutdown")
+# async def shutdown():
+#     global postgres_pool
+#     if postgres_pool:
+#         await postgres_pool.close()
+
+# # ---------- Обработка запросов ----------
+# class DataRequest(BaseModel):
+#     key: str
+#     value: str
+
+
+# @app.post("/data/")
+# async def set_data(request: DataRequest):
+#     redis_db.set(request.key, request.value)
+#     return {"message": "Data saved!"}
+
+
+# @app.get("/data/{key}")
+# async def get_data(key: str):
+#     value = redis_db.get(key)
+#     return {"key": key, "value": value}
 
 
 
-########################################### Celery End ###############################################
+
+
+
+########################################### Monitoring End ###############################################
+
+
+
 
 if __name__ == "__main__":
     uvicorn.run("main:app", host="0.0.0.0", port=5001, reload=True)
