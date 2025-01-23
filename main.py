@@ -161,7 +161,8 @@ origins = [
     "http://194.146.113.123:5000",  # Добавьте ваш IP адрес
     "http://localhost:5174",
     "http://194.146.113.123",
-    "https://194.146.113.123"
+    "https://194.146.113.123",
+    "http://194.146.113.123:8000"
 ]
 
 app.add_middleware(
@@ -557,6 +558,8 @@ async def tonality_landscape(
                 entry['_source']['hub'] = 'telegram.me'
             elif hub == 'maps.yandex.ru':
                 entry['_source']['hub'] = 'yandex.ru'
+            elif hub == 'tinkoff.ru':
+                entry['_source']['hub'] = 'tbank.ru'
 
     # Подсчет количества позитивных и негативных тональностей
     pos = [x['_source']['toneMark'] for x in data if x['_source']['toneMark'] == 1]
@@ -1130,8 +1133,8 @@ async def voice_analize(user: User = Depends(current_user), index: int = None,
 
         list_topn_hubs = list(hubs.keys())
         message_tonality = [[x['hub'], str(x['toneMark']).replace('0', 'Нейтрал').replace('-1', 'Негатив').replace('1', 'Позитив')] 
-                            for x in data if x['hub'] in list_topn_hubs]
-
+                            for x in data if x['hub'] in list_topn_hubs] 
+ 
 
         message_tonality_type = [[x['hub'], x['type'], str(x['toneMark']).replace('0', 'Нейтрал').replace('-1', 'Негатив').replace('1', 'Позитив')] 
                             for x in data if x['hub'] in list_topn_hubs]
@@ -1158,8 +1161,8 @@ async def voice_analize(user: User = Depends(current_user), index: int = None,
 
 
 @app.get("/media-rating", tags=['data analytics'])
-def media_rating(user: User = Depends(current_user), index: int = None, min_date: int=None,  
-                 max_date: int=None) -> MediaRatingModel:
+def media_rating(index: int = None, min_date: int=None,  
+                 max_date: int=None) -> MediaRatingModel: # user: User = Depends(current_user)
     
     # Путь к файлу с темами 
     file_path = '/home/dev/fastapi/analytics_app/data/indexes.pkl'
@@ -2033,9 +2036,9 @@ def load_file(user_id: str, file_type: str, folder_name: str, file_name: str):
     BERTOPIC_DIR = os.path.join(BASE_DIR, user_id, 'bertopic_files_directory', folder_name)
 
     # Определяем полный путь к файлу на основе типа файла
-    if file_type == 'projector_files_directory':
+    if file_type == 'projector_files_directory': 
         file_path = os.path.join(PROJECTOR_DIR, file_name)
-    elif file_type == 'bertopic_files_directory':
+    elif file_type == 'bertopic_files_directory': 
         file_path = os.path.join(BERTOPIC_DIR, file_name)
     elif file_type == 'json_files_directory':
         if '.json' not in file_name:
@@ -2119,19 +2122,19 @@ class AnalysisRequest(BaseModel):
     max_date: int
     query_str: Optional[str] = None
     system_prompt: Optional[str] = None
-    example_text: str  # Текст примера
-    example_thematics: str  # Тематики в тексте-примере
-    example_question_keywords: str  # Вопрос для ключевых слов текста
-    example_keywords: str  # Ключевые слова
+    # example_text: str  # Текст примера
+    # example_thematics: str  # Тематики в тексте-примере
+    # example_question_keywords: str  # Вопрос для ключевых слов текста
+    # example_keywords: str  # Ключевые слова
     example_question: str  # Вопрос
 
     def __init__(self, **data):
         super().__init__(**data)  # Вызываем родительский конструктор
         # Очищаем строковые поля
-        self.example_text = self.clean_string(self.example_text)
-        self.example_thematics = self.clean_string(self.example_thematics)
-        self.example_question_keywords = self.clean_string(self.example_question_keywords)
-        self.example_keywords = self.clean_string(self.example_keywords)
+        # self.example_text = self.clean_string(self.example_text)
+        # self.example_thematics = self.clean_string(self.example_thematics)
+        # self.example_question_keywords = self.clean_string(self.example_question_keywords)
+        # self.example_keywords = self.clean_string(self.example_keywords)
         self.example_question = self.clean_string(self.example_question)
 
     @staticmethod
@@ -2251,10 +2254,10 @@ async def llm_run(
             "min_date": str(analysis_request.min_date),
             "max_date": str(analysis_request.max_date),
             "system_prompt": analysis_request.system_prompt or "",  # Пустая строка, если не указано
-            "example_text": analysis_request.example_text or "",
-            "example_thematics": analysis_request.example_thematics or "",
-            "example_question_keywords": analysis_request.example_question_keywords or "",
-            "example_keywords": analysis_request.example_keywords or "",
+            # "example_text": analysis_request.example_text or "",
+            # "example_thematics": analysis_request.example_thematics or "",
+            # "example_question_keywords": analysis_request.example_question_keywords or "",
+            # "example_keywords": analysis_request.example_keywords or "",
             "example_question": analysis_request.example_question or "",
             "status": "pending",
             "total_texts": "0",  # Значение "0" всегда строка
@@ -2285,10 +2288,12 @@ async def llm_run(
         # status = await redis_db.get("gpu:status")
         # logging.info(f"Сбрасываем статус GPU: {status.decode('utf-8') if status else 'ключ отсутствует'}")
 
+        print(22555666)
         # Проверяем статус GPU
         if not await is_gpu_busy():
             logging.info("GPU свободен, запускаем задачу...")
             await set_gpu_status("busy")
+            print(111555777)
             queue_length = await redis_db.llen("queue:tasks")
             logging.info(f"Длина очереди задач: {queue_length}")
             next_task_id = await redis_db.lpop("queue:tasks")
@@ -3345,13 +3350,32 @@ async def get_metrics():
 #     return {"key": key, "value": value}
 
 
-
-
-
-
 ########################################### Monitoring End ###############################################
+# import httpx
 
+# class GenerateRequest(BaseModel):
+#     prompt: str
+#     max_length: int
 
+# @app.post("/generate")
+# async def generate(request: GenerateRequest):
+#     # Формируем данные для отправки на vllm сервер
+#     vllm_endpoint = "http://localhost:8000/generate"
+#     data = {
+#         "prompt": request.prompt,
+#         "max_length": request.max_length
+#     }
+    
+#     async with httpx.AsyncClient() as client:
+#         # Отправляем POST запрос на сервер vllm
+#         try:
+#             response = await client.post(vllm_endpoint, json=data)
+#             response.raise_for_status()  # Проверяем наличие ошибок
+#             return response.json()  # Возвращаем результат от vllm
+#         except httpx.RequestError as exc:
+#             raise HTTPException(status_code=400, detail=f"Request error: {exc}")
+#         except httpx.HTTPStatusError as exc:
+#             raise HTTPException(status_code=exc.response.status_code, detail=f"Error response: {exc.response.text}")
 
 
 if __name__ == "__main__":

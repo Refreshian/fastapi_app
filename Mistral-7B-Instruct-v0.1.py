@@ -48,7 +48,6 @@ russian_stopwords = stopwords.words("russian")
 # )
 
 ################################### data ###################################
-et = time.time()
 
 os.chdir('/home/dev/fastapi/analytics_app/data/6/json_files_directory/Cyber/')
 filename = 'kibersport_01.01.2024-31.12.2024.json'
@@ -74,10 +73,12 @@ texts = [preprocess_text(x) for x in texts]
 texts = texts[:500]
 print('Всего текстов: {}'.format(len(texts)))
 # print(texts[:2])
+# model_name = 'Meta-Llama-3-8B-Instruct'
+model_name = 'mistralai/Mistral-7B-Instruct-v0.1'
 
 ################################### model ###################################
 
-tokenizer = AutoTokenizer.from_pretrained("/home/dev/fastapi/analytics_app/data/LLM_models/Meta-Llama-3-8B-Instruct")
+tokenizer = AutoTokenizer.from_pretrained("/home/dev/fastapi/analytics_app/data/LLM_models/{model_name}")
 # model = AutoModelForCausalLM.from_pretrained("/home/dev/fastapi/analytics_app/data/LLM_models/Meta-Llama-3-8B-Instruct")
 
 from torch import bfloat16
@@ -96,7 +97,7 @@ gc.collect()
 torch.cuda.empty_cache()
 
 model = transformers.AutoModelForCausalLM.from_pretrained(
-    "/home/dev/fastapi/analytics_app/data/LLM_models/Meta-Llama-3-8B-Instruct",
+    "/home/dev/fastapi/analytics_app/data/LLM_models/{model_name}",
     trust_remote_code=True,
     quantization_config=bnb_config,
     device_map='auto',
@@ -136,6 +137,7 @@ pipe.tokenizer.pad_token_id = pipe.model.config.eos_token_id
 
 
 llm_labels = []
+et = time.time()
 
 count = 0
 # Проходим через каждый текст по отдельности
@@ -163,6 +165,10 @@ for i in tqdm(range(len(texts))):
         llm_labels.append('Длинный текст')
         count+=1
 
+
+st = time.time()
+elapsed_time = st - et
+print('Execution time:', elapsed_time, 'seconds')
 
 # ################################### BERTopic ###################################
 
@@ -481,8 +487,5 @@ os.chdir('/home/dev/fastapi/analytics_app/data/html_files')
 with open('my_list_llm_ans.pkl', 'wb') as file:
     pickle.dump(llm_labels, file)
 
-st = time.time()
-elapsed_time = st - et
-print('Execution time:', elapsed_time, 'seconds')
 
 print('Длинных текстов:', count)
