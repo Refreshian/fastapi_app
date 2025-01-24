@@ -2284,9 +2284,9 @@ async def llm_run(
         if not saved_task:
             raise Exception(f"Ошибка сохранения данных для задачи {task_id}!") 
         
-        # await redis_db.set("gpu:status", "idle")  # Для теста, явно сбрасываем статус
-        # status = await redis_db.get("gpu:status")
-        # logging.info(f"Сбрасываем статус GPU: {status.decode('utf-8') if status else 'ключ отсутствует'}")
+        await redis_db.set("gpu:status", "idle")  # Для теста, явно сбрасываем статус
+        status = await redis_db.get("gpu:status")
+        logging.info(f"Сбрасываем статус GPU: {status.decode('utf-8') if status else 'ключ отсутствует'}")
 
         print(22555666)
         # Проверяем статус GPU
@@ -2431,7 +2431,7 @@ async def llm_analyze(user_id: int, folder_name: str, file_name: str):
     if not os.path.exists(model_path):
         raise HTTPException(status_code=404, detail="Model file not found")
 
-    # Здесь можно открыть и использовать модель BERTopic
+    # Модель BERTopic
     topic_model = BERTopic.load(model_path)
 
     # Поиск в elastic за те же даты и строку поиска
@@ -2463,7 +2463,7 @@ async def llm_analyze(user_id: int, folder_name: str, file_name: str):
 
     # Получение полной таблицы
     df_join = pd.DataFrame(thematics).join(data, how='inner', lsuffix='_df1', rsuffix='_df2')
-    df_join.columns = ['Тематика', 'Время', 'Источник', 'Ссылка на автора', 'Автор', 'Ссылка на текст', 'Тип автора', 'Пол', 'Возраст',
+    df_join.columns = ['Имя кластера', 'Время', 'Источник', 'Ссылка на автора', 'Автор', 'Ссылка на текст', 'Тип автора', 'Пол', 'Возраст',
                        'Тип источника', 'Аудитория', 'Комментариев', 'Репостов', 'Лайков', 'Вовлеченность', 'Просмотров',
                        'Аудитория СМИ', 'Тональность', 'Страна', 'Регион']
 
@@ -2471,7 +2471,7 @@ async def llm_analyze(user_id: int, folder_name: str, file_name: str):
     df_join['Тональность'] = df_join['Тональность'].map({0: 'Нейтральная', -1: 'Негатив', 1: 'Позитив'})
 
     # Получение агрегированной таблицы
-    df_group = df_join[['Тематика', 'Аудитория', 'Комментариев', 'Репостов', 'Лайков', 'Вовлеченность', 'Просмотров']].copy()
+    df_group = df_join[['Имя кластера', 'Аудитория', 'Комментариев', 'Репостов', 'Лайков', 'Вовлеченность', 'Просмотров']].copy()
     
     numerical_columns = ['Аудитория', 'Комментариев', 'Репостов', 'Лайков', 'Вовлеченность', 'Просмотров']
     
@@ -2480,16 +2480,29 @@ async def llm_analyze(user_id: int, folder_name: str, file_name: str):
         df_group[column] = df_group[column].fillna(0).astype(int)
 
     # Группировка по 'Тематика' и суммирование
-    result = df_group.groupby('Тематика').sum().reset_index()
+    result = df_group.groupby('Имя кластера').sum().reset_index()
 
     # Подсчет количества тем
-    theme_count = result['Тематика'].value_counts()
-    result['Количество'] = result['Тематика'].map(theme_count)
+    theme_count = result['Имя кластера'].value_counts()
+    result['Количество'] = result['Имя кластера'].map(theme_count)
     result.sort_values(by='Количество', ascending=False, inplace=True)
-    result = result[['Тематика', 'Количество', 'Аудитория', 'Комментариев', 'Репостов', 'Лайков', 'Вовлеченность', 'Просмотров']]
+    result = result[['Имя кластера', 'Количество', 'Аудитория', 'Комментариев', 'Репостов', 'Лайков', 'Вовлеченность', 'Просмотров']]
 
     # Замена NaN на None в итоговых данных
     result = result.where(pd.notnull(result), None)
+
+    # Подгружаем данные с тематикой по каждому тексту
+    texts_path = os.path.join("/home/dev/fastapi/analytics_app/data", str(user_id), 
+                                "bertopic_files_directory", model_folder_name)
+    # Получаем список файлов в директории
+    files = os.listdir(texts_path)
+
+    # Находим файл, в имени которых содержится выбранный html
+    file = [file for file in files if file_name.replace('.html', '') in file]
+
+    with open(texts_path + '/' + file + '.pkl', 'rb') as f:
+        texts_thematics = pickle.load(f)
+    df_join.insert(1, 'Тематика текста', texts_thematics)
 
     # Возвращение HTML файла и таблиц
     with open(html_file_path, 'r', encoding='utf-8') as file:

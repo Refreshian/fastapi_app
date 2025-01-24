@@ -6,6 +6,7 @@ import pickle
 import asyncio
 import gc, json
 import traceback
+import aiohttp
 # import redis
 import torch
 from tqdm import tqdm
@@ -67,6 +68,22 @@ def load_dict_from_pickle(file_name):
         return None
 
 
+async def generate_answers(prompt):
+    url = "http://localhost:11434/api/generate"
+    payload = {
+        "model": "llama3",
+        "prompt": prompt,
+        "stream": False
+    }
+    async with aiohttp.ClientSession() as session:
+        async with session.post(url, json=payload) as response:
+            if response.status == 200:
+                response_json = await response.json()
+                return response_json.get("response", "")
+            else:
+                print(f"Ошибка при запросе к Ollama: {response.status}")
+                return None
+
 async def run_llm_query(task_data: dict):
     """Обрабатывает LLM-запрос с обновлением статуса задачи в Redis."""
     try:
@@ -91,28 +108,23 @@ async def run_llm_query(task_data: dict):
         data = [x for x in data if task_data['min_date'] <= x['timeCreate'] <= task_data['max_date']]
 
         # Получаем тексты и ограничиваем их количество
-        et = time.time()
         texts = [x['text'] for x in data]
-        texts = texts[:2000]  # Ограничение
+        texts = texts[:1000]  # Ограничение
         total_texts = len(texts)
 
         # Функция очистки текста
         def preprocess_text(text):
-            # Приведение к нижнему регистру
             text = text.lower()
-            # Удаление ссылок, символов и цифр
             text = re.sub(r"http\S+|www\S+|https\S+", '', text, flags=re.MULTILINE)
             text = re.sub(r'\d+', '', text)
             text = re.sub(r'[^\w\s]', '', text)
-            # Удаление стоп-слов
             text = ' '.join([word for word in text.split() if word not in russian_stopwords])
             return text
 
         texts = [preprocess_text(x) for x in texts]
         print('Всего текстов: {}'.format(total_texts))
-
-        model_name = 'Vikhr-Llama3.1-8B-Instruct-R-21-09-24'
-
+        st = time.time()
+        
         # Обновляем начальный статус задачи в Redis
         await redis_db.hset(f"task:{task_data['task_id']}", mapping={
             "status": "in_progress",
@@ -121,138 +133,59 @@ async def run_llm_query(task_data: dict):
             "progress": 0,
         })
 
-        ################################### Модель ###################################
+        
 
-        tokenizer = AutoTokenizer.from_pretrained(
-            f"/home/dev/fastapi/analytics_app/data/LLM_models/{model_name}"
-        )
+        # Функция генерации ответов
+        async def generate_answers(text):
+            url = "http://localhost:11434/api/generate"
+            payload = {
+                "model": "llama3",
+                "prompt": (
+                    f"У меня есть следующий текст:\n"
+                    f"{text}\n\n"
+                    "Есть ли в тексте фобии (страхи, предубеждения, опасения и т.д.) перед искусственным интеллектом (ИИ)? "
+                    "Если они есть - в чем причина фобии? Отвечай кратко (до 2 предложений)"
+                ),
+                "stream": False
+            }
+            async with aiohttp.ClientSession() as session:
+                async with session.post(url, json=payload) as response:
+                    if response.status == 200:
+                        response_json = await response.json()
+                        return response_json.get("response", "")
+                    else:
+                        print("===1+++1===")
+                        print(f"Ошибка при запросе к Ollama: {response.status}")
+                        return None
+        
 
-        bnb_config = transformers.BitsAndBytesConfig(
-            load_in_4bit=True,  # 4-bit квантование
-            bnb_4bit_quant_type='nf4',  # Normalized float 4
-            bnb_4bit_use_double_quant=True,  # Вторичное квантование
-            bnb_4bit_compute_dtype=bfloat16  # Тип вычислений
-        )
+        # Асинхронный вызов для всех текстов
+        tasks = [generate_answers(text) for text in texts]
+        llm_labels = await asyncio.gather(*tasks)
 
-        model = transformers.AutoModelForCausalLM.from_pretrained(
-            f"/home/dev/fastapi/analytics_app/data/LLM_models/{model_name}",
-            trust_remote_code=True,
-            quantization_config=bnb_config,
-            device_map='auto',
-        )
-
-        pipe = pipeline(
-            model=model,
-            tokenizer=tokenizer,
-            task='text-generation',
-            temperature=0.1,
-            max_new_tokens=500,
-            repetition_penalty=1.1,
-        )
-
-        ################################### Промты ###################################
-
-        system_prompt = """
-        <s>[INST] <<SYS>>
-        Ты дружелюбный ассистент для анализа текстов из социальных медиа. Отвечай только в указанном формате.
-        <</SYS>>
-        """
-        batch_size = 20
-        llm_labels = []
-        processed_texts = {}
-        et = time.time()  # Начало отсчета времени
-        gc.collect()
-        torch.cuda.empty_cache()
-        count_long_texts = 0
-        completed_texts = 0
-
-        # Генерация заголовков
-        # Проходим через массив текстов, обрабатывая их батчами
-        for i in tqdm(range(0, len(texts), batch_size)):
-            await asyncio.sleep(0.01)
+        completed_texts = 0 
+        for i, label in enumerate(llm_labels):
+            if label:
+                completed_texts += 1
             
-            batch_texts = texts[i:i + batch_size]  # Получаем подмассив текстов для батча
-
-            # Создаем сообщения для LLM, добавляя ожидаемый формат ответа
-            messages = [
-                    # {
-                    #     "role": "system", 
-                    #     "content": (
-                    #         f"{system_prompt}"
-                    #         f"Вот текст:\n"
-                    #         f"{text}\n\n"
-                    #         "Согласно этому тексту, выдели ключевые слова и сформулируй заголовок. "
-                    #         "Пожалуйста, сообщи только заголовок."
-                    #     )
-                    # }
-
-                    {
-                        "role": "system", 
-                        "content": (
-                            f"{system_prompt}"
-                            f"У меня есть следующий текст:\n"
-                            f"{text}\n\n"
-                            # "На основе текста выпиши ключевые слова (до 9 слов) и составь краткий заголовок"
-                            "На основе текста составь краткий заголовок"
-
-                        )
-                    }
-                for text in batch_texts
-                if len(text) <= 15000  # Игнорируем длинные тексты сразу в исходном массиве
-            ]
-            
-            # Проверяем, есть ли тексты для обработки в данной партии
-            if not messages:
-                completed_texts += len(batch_texts)
-                progress = round((completed_texts / total_texts) * 100, 1)
-                
-                # Записываем прогресс в Redis
-                await redis_db.hset(f"task:{task_data['task_id']}", mapping={"completed_texts": completed_texts, "progress": progress})
-                continue  # Переходим к следующему батчу
-
-            # Очищаем кэш перед вызовом модели
-            torch.cuda.empty_cache()
-            
-            # Используем torch.no_grad() для предотвращения вычисления градиентов
-            with torch.no_grad():
-                # Генерируем ответ для батча, делая вызов вашей модели
-                response = pipe(messages, num_return_sequences=1)
-
-                # Итерируем по результатам
-                for res in response:
-                    try:
-                        # Проверяем, что res является словарем и содержит нужный ключ
-                        if isinstance(res, dict) and 'generated_text' in res:
-                            # Добавляем содержимое сгенерированного текста без удаления
-                            for text_result in res['generated_text']:
-                                if isinstance(text_result, dict) and 'content' in text_result:
-                                    # Извлекаем текст, убирая ненужные символы
-                                    generated_content = text_result['content'].replace('[/INST]\n', '').replace('\n', '').replace('[/INST]', '')
-                                    llm_labels.append(generated_content)
-                                else:
-                                    print("Unexpected generated text format:", text_result)
-                        else:
-                            print("Unexpected result format:", res)
-                    except Exception as e:
-                        print("Error processing result:", e)
-
-            # Следим за длинными текстами
-            for text in batch_texts:
-                if len(text) > 15000:
-                    llm_labels.append('Длинный текст')
-                    count_long_texts += 1
-
-            # Обновляем прогресс после обработки каждого текста
-            completed_texts += len(batch_texts)
+            # Обновляем прогресс в Redis
             progress = round((completed_texts / total_texts) * 100, 1)
-            
-            # Записываем прогресс в Redis
-            await redis_db.hset(f"task:{task_data['task_id']}", mapping={"completed_texts": completed_texts, "progress": progress})
+            await redis_db.hset(f"task:{task_data['task_id']}", mapping={
+                "completed_texts": completed_texts,
+                "progress": progress
+            })
 
         # Финальное обновление статуса задачи
         await redis_db.hset(f"task:{task_data['task_id']}", mapping={"status": "done", "completed_texts": total_texts, "progress": 100})
+        
+        et = time.time()
+        # Заканчиваем подсчет времени
+        elapsed_time = time.time() - st
+        print('Execution time:', elapsed_time, 'seconds')
 
         ################################### BERTopic ###################################
+        # print(555777999)
+        # print(llm_labels[:5])
 
         # Шаг 1 - Очистка данных
         llm_labels = [re.sub(r"[^\w\s\"«»']", "", label.strip()) for label in llm_labels if label.strip()]
@@ -296,39 +229,33 @@ async def run_llm_query(task_data: dict):
         topics, probs = topic_model.fit_transform(llm_labels, embeddings)
 
         # Шаг 6 - Генерация заголовков тем
-        topic_labels = topic_model.generate_topic_labels(nr_words=10)  # Например, по 6 ключевых слова на тему
-        for i, label in enumerate(topic_labels):
-            print(f"Тема {i}: {label}")
+        async def generate_topic_label(key_words):
+            url = "http://localhost:11434/api/generate"
+            payload = {
+                "model": "llama3",
+                "prompt": (
+                    f"Используя ключевые слова: {key_words}, сгенерируй на русском языке короткий "
+                    "(до 8 слов) и понятный заголовок для данной темы, пиши только сам заголовок на русском языке."
+                ),
+                "stream": False
+            }
+            async with aiohttp.ClientSession() as session:
+                async with session.post(url, json=payload) as response:
+                    if response.status == 200:
+                        response_json = await response.json()
+                        return response_json.get("response", "")
+                    else:
+                        print("===2+++2===")
+                        print(f"Ошибка при запросе к Ollama: {response.status}")
+                        return None
 
-        pipe = pipeline(
-            model=model,
-            tokenizer=tokenizer,
-            task='text-generation',
-            temperature=0.1,
-            max_new_tokens=500,
-            repetition_penalty=1.1,
-        )
-
-        # Шаг 6 - Генерация заголовков тем
+        # Генерация заголовков тем с помощью асинхронных запросов
         topic_labels_llama3 = []
-
         for i, topic in enumerate(topic_model.get_topics().values()):  # Получаем ключевые слова тем
             key_words = " | ".join(token[0] for token in topic[:10])  # Берем 10 ключевых слов для темы
-
-            # Формируем сообщения
-            messages = [
-                {"role": "system", "content": f"[INST] Используя ключевые слова: {key_words}, сгенерируй на русском языке короткий (до 8 слов) и понятный заголовок для данной темы, пиши только сам заголовок на русском языке. [/INST]"}
-            ]
-            
-            # Очищаем кэш перед вызовом модели
-            torch.cuda.empty_cache()
-            
-            # Используем torch.no_grad() для предотвращения вычисления градиентов
-            with torch.no_grad():
-                response = pipe(messages, num_return_sequences=1)
-            
-            # Обрабатываем ответ
-            topic_labels_llama3.append(response[0]['generated_text'][1]['content'].replace('[/INST]\n', '').replace('\n', '').replace('[/INST]', ''))
+            label = await generate_topic_label(key_words)
+            if label:
+                topic_labels_llama3.append(label)
 
         for i, label in enumerate(topic_labels_llama3):
             print(f"Тема {i}: {label}")
@@ -340,134 +267,6 @@ async def run_llm_query(task_data: dict):
             if len(words) > max_words:
                 return ' '.join(words[:max_words]) + '...'  # Сокращаем и добавляем многоточие
             return text  # Если длина не превышает, возвращаем оригинальный текст
-
-        # Сокращение всех тем до 7 слов
-        topic_labels_llama3 = [shorten_by_words(topic, 7) for topic in topic_labels_llama3]
-
-        topic_model.set_topic_labels(topic_labels_llama3)
-        
-        # Визуализация
-        fig = topic_model.visualize_documents(llm_labels, reduced_embeddings=embeddings_umap, hide_annotations=True, 
-                                        hide_document_hover=False, custom_labels=True)
-
-        # Устанавливаем путь к директории файла
-        file_location = f'/home/dev/fastapi/analytics_app/data/{task_data['user_id']}/bertopic_files_directory/{task_data['folder_name']}/'
-
-        # Создание директории, если она не существует
-        os.makedirs(os.path.dirname(file_location), exist_ok=True)
-
-        # Формируем новое имя файла с добавлением даты и времени
-        new_filename = f"{indexes[int(task_data['index'])]}_{current_time}.html"
-        fig.write_html(file_location + new_filename)
-
-          
-        # Записываем прогресс в Redis
-        await redis_db.hset(f"task:{task_data['task_id']}", mapping={"completed_texts": completed_texts*batch_size, "progress": progress})
-
-        print(f'llm_labels: {len(llm_labels)}')
-
-        # Финальное обновление статуса задачи
-        await redis_db.hset(f"task:{task_data['task_id']}", mapping={"status": "done", "completed_texts": total_texts, "progress": 100})
-
-        ################################### BERTopic ###################################
-
-        # Шаг 1 - Очистка данных
-        llm_labels = [re.sub(r"[^\w\s\"«»']", "", label.strip()) for label in llm_labels if label.strip()]
-
-        gc.collect()
-        torch.cuda.empty_cache()
-
-        # Шаг 2 - Генерация эмбедингов
-        embedding_model = SentenceTransformer("DeepPavlov/rubert-base-cased-sentence")
-        embeddings = embedding_model.encode(llm_labels, show_progress_bar=True)
-
-        # Шаг 3 - Снижение размерности UMAP
-        # umap_model = UMAP(n_neighbors=15, n_components=5, min_dist=0.0, metric="cosine", random_state=42)
-        # embeddings_umap = umap_model.fit_transform(embeddings)
-
-        # Проверим, что embeddings не пуст или
-        if len(embeddings) > 0:
-            umap_model = UMAP(n_neighbors=2, n_components=min(len(embeddings), 5), min_dist=0.0, metric="cosine", random_state=42)
-            embeddings_umap = umap_model.fit_transform(embeddings)
-        else:
-            print("Нет доступных эмбеддингов для обработки.")
-        
-        # Шаг 4 - Кластеризация HDBSCAN
-        hdbscan_model = HDBSCAN(min_cluster_size=15, metric="euclidean", cluster_selection_method="eom", prediction_data=True)
-        hdbscan_model.fit(embeddings_umap)
-
-        # Вывод результатов кластеризации
-        labels = hdbscan_model.labels_
-
-        # Подсчет уникальных значений и их количества
-        unique_labels, counts = np.unique(labels, return_counts=True)
-
-        # Число кластеров (кроме шума `-1`)
-        num_clusters = len(unique_labels) - (1 if -1 in unique_labels else 0)
-
-        # Число шумовых точек
-        if -1 in unique_labels:
-            noise_index = np.where(unique_labels == -1)[0][0]  # Найти индекс метки `-1` в unique_labels
-            num_noise_points = counts[noise_index]
-        else:
-            num_noise_points = 0
-        # Шаг 5 - Тематическое моделирование BERTopic
-        topic_model = BERTopic(embedding_model=embedding_model, verbose=True)
-        topics, probs = topic_model.fit_transform(llm_labels, embeddings)
-
-        # Шаг 6 - Генерация заголовков тем
-        topic_labels = topic_model.generate_topic_labels(nr_words=6)  # Например, по 6 ключевых слова на тему
-        for i, label in enumerate(topic_labels):
-            print(f"Тема {i}: {label}")
-
-        pipe = pipeline(
-            model=model,
-            tokenizer=tokenizer,
-            task='text-generation',
-            temperature=0.1,
-            max_new_tokens=500,
-            repetition_penalty=1.1,
-        )
-        # pipe.tokenizer.pad_token_id = pipe.model.config.eos_token_id
-
-        # Шаг 6 - Генерация заголовков тем
-        topic_labels_llama3 = []
-
-        for i, topic in enumerate(topic_model.get_topics().values()):  # Получаем ключевые слова тем
-            key_words = " | ".join(token[0] for token in topic[:10])  # Берем 10 ключевых слов для темы
-
-            # Формируем сообщения
-            messages = [
-                {"role": "system", "content": f"[INST] Используя ключевые слова: {key_words}, сгенерируй на русском языке короткий (до 8 слов) и понятный заголовок для данной темы, пиши только сам заголовок на русском языке. [/INST]"}
-            ]
-            
-            # Очищаем кэш перед вызовом модели
-            torch.cuda.empty_cache()
-            
-            # Используем torch.no_grad() для предотвращения вычисления градиентов
-            with torch.no_grad():
-                response = pipe(messages, num_return_sequences=1)
-            
-            # Обрабатываем ответ
-            topic_labels_llama3.append(response[0]['generated_text'][1]['content'].replace('[/INST]\n', '').replace('\n', '').replace('[/INST]', ''))
-    
-        print(f'topic_labels_llama3_1: {len(topic_labels_llama3)}')
-
-        def shorten_by_words(text, max_words):
-            """Сокращает текст до заданного количества слов с добавлением многоточия.
-
-            Аргументы:
-            text -- исходный текст (строка)
-            max_words -- максимальное количество слов (целое число)
-
-            Возвращает:
-            Сокращенный текст (строка).
-            """
-            words = text.split()  # Разделяем текст на слова
-            if len(words) > max_words:
-                return ' '.join(words[:max_words]) + '...'  # Сокращаем и добавляем многоточие
-            return text  # Если длина не превышает, возвращаем оригинальный текст
-
 
         # Сокращение всех тем до 7 слов
         topic_labels_llama3 = [shorten_by_words(topic, 7) for topic in topic_labels_llama3]
@@ -521,6 +320,7 @@ async def run_llm_query(task_data: dict):
         with open(f'my_list_llm_ans_{indexes[int(task_data['index'])]}_{current_time}.pkl', 'wb') as file:
             pickle.dump(llm_labels, file)
 
+
         # Получение и обработка данных пользователя
         user_data = await redis_db.execute_command('HGETALL', task_data['user_id'])
         # Если данные возвращаются в формате 'dict' с байтовыми строками, декодируйте их
@@ -540,7 +340,7 @@ async def run_llm_query(task_data: dict):
             "max_date": task_data['max_date'],
             "index_number": int(task_data['index']),
             "task_id": task_data['task_id'],
-            "count_long_texts": count_long_texts
+            # "count_long_texts": 
         }
 
         # Проверяем данные пользователя
