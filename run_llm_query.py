@@ -71,7 +71,7 @@ def load_dict_from_pickle(file_name):
 async def generate_answers(prompt):
     url = "http://localhost:11434/api/generate"
     payload = {
-        "model": "llama3",
+        "model": "Vikhr_Q3",
         "prompt": prompt,
         "stream": False
     }
@@ -83,6 +83,8 @@ async def generate_answers(prompt):
             else:
                 print(f"Ошибка при запросе к Ollama: {response.status}")
                 return None
+            
+from ollama import AsyncClient
 
 async def run_llm_query(task_data: dict):
     """Обрабатывает LLM-запрос с обновлением статуса задачи в Redis."""
@@ -109,7 +111,7 @@ async def run_llm_query(task_data: dict):
 
         # Получаем тексты и ограничиваем их количество
         texts = [x['text'] for x in data]
-        texts = texts[:1000]  # Ограничение
+        texts = texts[:50]  # Ограничение
         total_texts = len(texts)
 
         # Функция очистки текста
@@ -124,7 +126,6 @@ async def run_llm_query(task_data: dict):
         texts = [preprocess_text(x) for x in texts]
         print('Всего текстов: {}'.format(total_texts))
         st = time.time()
-        
         # Обновляем начальный статус задачи в Redis
         await redis_db.hset(f"task:{task_data['task_id']}", mapping={
             "status": "in_progress",
@@ -133,37 +134,51 @@ async def run_llm_query(task_data: dict):
             "progress": 0,
         })
 
+        llm_labels = []
         
+        async def generate_answers(text, semaphore):
+            async with semaphore:
+                client = AsyncClient(host='http://localhost:11434')
+                
+                payload = {
+                    "model": "Vikhr_Q3",
+                    "messages": [
+                        {
+                            "role": "user",
+                            "content": (
+                                f"У меня есть следующий текст:\n"
+                                f"{text}\n\n"
+                                "Есть ли в тексте фобии (страхи, предубеждения, опасения и т.д.) перед искусственным интеллектом (ИИ)? "
+                                "Если они есть - в чем причина фобии? Отвечай кратко (до 2 предложений)"
+                            )
+                        }
+                    ]
+                }
+                
+                # await asyncio.sleep(0.1)  # Задержка перед запросом
 
-        # Функция генерации ответов
-        async def generate_answers(text):
-            url = "http://localhost:11434/api/generate"
-            payload = {
-                "model": "llama3",
-                "prompt": (
-                    f"У меня есть следующий текст:\n"
-                    f"{text}\n\n"
-                    "Есть ли в тексте фобии (страхи, предубеждения, опасения и т.д.) перед искусственным интеллектом (ИИ)? "
-                    "Если они есть - в чем причина фобии? Отвечай кратко (до 2 предложений)"
-                ),
-                "stream": False
-            }
-            async with aiohttp.ClientSession() as session:
-                async with session.post(url, json=payload) as response:
-                    if response.status == 200:
-                        response_json = await response.json()
-                        return response_json.get("response", "")
-                    else:
-                        print("===1+++1===")
-                        print(f"Ошибка при запросе к Ollama: {response.status}")
-                        return None
-        
+                response = await client.chat(model='Vikhr_Q3', messages=payload['messages'])
+                
+                if response:
+                    # Обработка ответа
+                    llm_labels.append(response['message']['content'])
 
-        # Асинхронный вызов для всех текстов
-        tasks = [generate_answers(text) for text in texts]
-        llm_labels = await asyncio.gather(*tasks)
+        async def main():
+            semaphore = asyncio.Semaphore(10)  # Например, можем задать ограничение на 5 параллельных запросов
+            tasks = [generate_answers(text, semaphore) for text in texts]
+            await asyncio.gather(*tasks)
 
-        completed_texts = 0 
+        # Запускаем главный цикл
+        await main()
+
+        print(llm_labels[:2])
+
+        et = time.time()
+        # Заканчиваем подсчет времени
+        elapsed_time = time.time() - st
+        print('Execution time:', elapsed_time, 'seconds')
+
+        completed_texts = 0
         for i, label in enumerate(llm_labels):
             if label:
                 completed_texts += 1
@@ -177,11 +192,7 @@ async def run_llm_query(task_data: dict):
 
         # Финальное обновление статуса задачи
         await redis_db.hset(f"task:{task_data['task_id']}", mapping={"status": "done", "completed_texts": total_texts, "progress": 100})
-        
-        et = time.time()
-        # Заканчиваем подсчет времени
-        elapsed_time = time.time() - st
-        print('Execution time:', elapsed_time, 'seconds')
+    
 
         ################################### BERTopic ###################################
         # print(555777999)

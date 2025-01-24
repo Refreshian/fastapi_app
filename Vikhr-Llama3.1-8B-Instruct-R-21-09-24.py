@@ -70,7 +70,7 @@ data = elastic_query(theme_index=indexes[index_el], query_str='all')
 
 # Получаем тексты и ограничиваем их количество
 texts = [x['text'] for x in data]
-texts = texts[:10]  # Ограничение
+texts = texts[:20]  # Ограничение
 total_texts = len(texts)
 
 # Функция очистки текста
@@ -158,7 +158,6 @@ async def main(texts):
     return llm_labels
 
 # Пример вызова функции main
-# texts = [x[:50] for x in texts]
 llm_labels = asyncio.run(main(texts))
 
 for content in llm_labels:
