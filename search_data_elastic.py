@@ -22,24 +22,46 @@ def update_max_result_window(index_name: str, max_window: int = 1000000):
 
 
 # Обновленная функция elastic_query с использованием Scroll API
-def elastic_query(theme_index: str, query_str: str, scroll_time: str = '5m', batch_size: int = 10000):
+def elastic_query(theme_index: str, query_str: str, min_date: int = None, max_date: int = None, scroll_time: str = '5m', batch_size: int = 10000):
     # Обновляем настройку max_result_window для текущего индекса
     update_max_result_window(theme_index)
-    
+
     # Стартовый запрос
-    if query_str == 'all' or query_str  == None:
+    if query_str == 'all' or query_str is None:
         query = {
             "query": {
                 "match_all": {}
             }
         }
     else:
-        # Для более сложных запросов из вашего кода (или | и ...)
+        # Для более сложных запросов
         query = {
             "query": {
                 "query_string": {
                     "query": query_str,
                     "default_field": "text"
+                }
+            }
+        }
+
+    # Добавляем фильтрацию по дате, если указаны min_date и max_date
+    if min_date is not None or max_date is not None:
+        date_range_filter = {
+            "range": {
+                "timeCreate": {}
+            }
+        }
+        if min_date is not None:
+            date_range_filter["range"]["timeCreate"]["gte"] = min_date
+        if max_date is not None:
+            date_range_filter["range"]["timeCreate"]["lte"] = max_date
+
+        # Объединяем основной запрос с фильтром по дате
+        query = {
+            "query": {
+                "bool": {
+                    "must": query["query"],
+                    "filter": date_range_filter
                 }
             }
         }
@@ -50,7 +72,7 @@ def elastic_query(theme_index: str, query_str: str, scroll_time: str = '5m', bat
             index=theme_index,
             body=query,
             scroll=scroll_time,  # Время, которое контекст scroll будет "держаться"
-            size=batch_size      # Размер одной пачки результатов
+            size=batch_size  # Размер одной пачки результатов
         )
     except Exception as e:
         print(f"Ошибка при выполнении запроса: {e}")
@@ -67,7 +89,7 @@ def elastic_query(theme_index: str, query_str: str, scroll_time: str = '5m', bat
         try:
             response = es.scroll(
                 scroll_id=scroll_id,  # Используем предыдущий scroll_id
-                scroll=scroll_time    # Продлеваем время жизни Scroll-контекста
+                scroll=scroll_time  # Продлеваем время жизни Scroll-контекста
             )
             results.extend(response['hits']['hits'])  # Добавляем новые данные
             scroll_id = response['_scroll_id']  # Обновляем scroll_id

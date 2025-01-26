@@ -517,80 +517,62 @@ def load_dict_from_pickle(file_name):
         return None
 
 
-@app.get("/tonality_landscape", tags=['data analytics'])# user: User = Depends(current_user),
+@app.get("/tonality_landscape", tags=['data analytics'])
 async def tonality_landscape(
-    
-    index: int = None, 
+    index: int = None,
     min_date: Optional[int] = None,
     max_date: Optional[int] = None
 ) -> Model_TonalityLandscape:
-    # Путь к файлу с темами
     file_path = '/home/dev/fastapi/analytics_app/data/indexes.pkl'
-    # Загрузка словаря с темами
     indexes = load_dict_from_pickle(file_path)
 
-    # Формирование запроса для Elasticsearch
-    query = {
-        "size": 10000,
-        "query": {
-            "range": {
-                "timeCreate": {
-                    "gte": min_date,
-                    "lte": max_date,
-                    "boost": 2.0
-                }
-            }
-        }
-    }
+    print(index)
 
-    # Выполнение запроса к Elasticsearch
-    data = es.search(index=indexes[index], body=query)
-    data = data['hits']['hits']
+    data = elastic_query(theme_index=indexes[index], min_date=min_date, max_date=max_date, query_str='all')
 
-    print(555)
-    print(len(data))
+    print(f"Общее количество документов: {len(data)}")
 
-    # Обработка данных: заменяем значения в 'hub', если они соответствуют конкретным условиям 
+    # Обработка данных: заменяем значения в 'hub', если они соответствуют конкретным условиям
     for entry in data:
-        if '_source' in entry and 'hub' in entry['_source']:
-            hub = entry['_source']['hub']
+        if 'hub' in entry:
+            hub = entry['hub']
             if hub == 'telegram.org':
-                entry['_source']['hub'] = 'telegram.me'
+                entry['hub'] = 'telegram.me'
             elif hub == 'maps.yandex.ru':
-                entry['_source']['hub'] = 'yandex.ru'
+                entry['hub'] = 'yandex.ru'
             elif hub == 'tinkoff.ru':
-                entry['_source']['hub'] = 'tbank.ru'
+                entry['hub'] = 'tbank.ru'
 
-    # Подсчет количества позитивных и негативных тональностей
-    pos = [x['_source']['toneMark'] for x in data if x['_source']['toneMark'] == 1]
-    neg = [x['_source']['toneMark'] for x in data if x['_source']['toneMark'] == -1]
+    # Подсчет позитивных и негативных тональностей
+    pos = [entry for entry in data if entry.get('toneMark') == 1]
+    neg = [entry for entry in data if entry.get('toneMark') == -1]
 
     # Подсчет источников (hub)
-    neg_hub = [x['_source']['hub'] for x in data if x['_source']['toneMark'] == -1]
+    neg_hub = [entry['hub'] for entry in data if entry.get('toneMark') == -1]
     dct_neg_hub = dict(Counter(neg_hub))
     dct_neg_hub = dict(sorted(dct_neg_hub.items(), key=lambda x: x[1], reverse=True))
 
-    pos_hub = [x['_source']['hub'] for x in data if x['_source']['toneMark'] == 1]
+    pos_hub = [entry['hub'] for entry in data if entry.get('toneMark') == 1]
     dct_pos_hub = dict(Counter(pos_hub))
     dct_pos_hub = dict(sorted(dct_pos_hub.items(), key=lambda x: x[1], reverse=True))
 
     # Обработка авторов (негатив)
-    neg_authors = [x['_source'] for x in data if x['_source']['toneMark'] == -1]
+    neg_authors = [entry for entry in data if entry.get('toneMark') == -1]
     neg_authors_hub = []
     for key in dct_neg_hub.keys():
-        neg_authors_hub.append([(x['authorObject'], [{"text": x['text'], "hub": x['hub'], "url": x['url'], "er": x['er'],
-                                                      "viewsCount": x['viewsCount'], "region": x['region']}])
-                                for x in neg_authors if x['hub'] == key])
+        neg_authors_hub.append([(entry['authorObject'], [{"text": entry['text'], "hub": entry['hub'], "url": entry['url'], "er": entry['er'],
+                                                         "viewsCount": entry['viewsCount'], "region": entry['region']}])
+                                for entry in neg_authors if entry['hub'] == key])
 
-    a = process_authors_data(neg_authors_hub)
+    a = process_authors_data(neg_authors_hub) 
 
     # Обработка авторов (позитив)
-    pos_authors = [x['_source'] for x in data if x['_source']['toneMark'] == 1]
+    pos_authors = [entry for entry in data if entry.get('toneMark') == 1]
     pos_authors_hub = []
     for key in dct_pos_hub.keys():
-        pos_authors_hub.append([(x['authorObject'], [{"text": x['text'], "hub": x['hub'], "url": x['url'], "er": x['er'],
-                                                      "viewsCount": x['viewsCount'], "region": x['region']}])
-                                for x in pos_authors if x['hub'] == key])
+        pos_authors_hub.append([(entry['authorObject'], [{"text": entry['text'], "hub": entry['hub'], "url": entry['url'], "er": entry['er'],
+                                                         "viewsCount": entry['viewsCount'], "region": entry['region']}])
+                                for entry in pos_authors if entry['hub'] == key])
 
     d = process_authors_data(pos_authors_hub)
 
@@ -600,8 +582,14 @@ async def tonality_landscape(
 
     # Формирование итоговых данных
     values = Model_TonalityLandscape(
-        tonality_values={"negative_count": len(neg), "positive_count": len(pos)},
-        tonality_hubs_values={"negative_hubs": dct_neg_hub, "positive_hubs": dct_pos_hub},
+        tonality_values=TonalityValues(
+            negative_count=len(neg),
+            positive_count=len(pos)
+        ),
+        tonality_hubs_values=ModelAuthorsTonalityLandscape(
+            negative_hubs=dct_neg_hub,
+            positive_hubs=dct_pos_hub
+        ),
         negative_authors_values=a,
         positive_authors_values=d
     )
@@ -609,36 +597,19 @@ async def tonality_landscape(
 
 
 def process_authors_data(authors_hub):
-    """
-    Обработка данных об авторах и подготовка информации в требуемом формате.
-    """
     authors_list = []
-    for i in range(len(authors_hub)):
-        name_unique_author = [
-            x[0].get('fullname', x[0].get('hub', '')) for x in authors_hub[i]
-        ]
+    for author_group in authors_hub:
+        name_unique_author = [author[0].get('fullname', author[0].get('hub', '')) for author in author_group]
         dct_non_unique_author = dict(Counter(name_unique_author))
         list_non_unique_authors = list(set([key for key, val in dct_non_unique_author.items() if val > 1]))
         list_unique_authors = list(set([key for key, val in dct_non_unique_author.items() if val == 1]))
 
-        # Обработка неуникальных авторов
-        for author_name in list_non_unique_authors:
-            c = {}
-            c['author_data'] = []
-            try:
-                author_dict = [
-                    x[0] for x in authors_hub[i]
-                    if x[0].get('fullname', x[0].get('hub', '')) == author_name
-                ][0]
-                texts_raw = [
-                    x[1] for x in authors_hub[i]
-                    if x[0].get('fullname', x[0].get('hub', '')) == author_name
-                ]
-                texts = []
-
-                # Преобразуем каждый текст в формат класса Text
-                for text_group in texts_raw:
-                    for text_item in text_group:
+        for author_name in list_non_unique_authors + list_unique_authors:
+            author_data = []
+            for author in author_group:
+                if author[0].get('fullname', author[0].get('hub', '')) == author_name:
+                    texts = []
+                    for text_item in author[1]:
                         try:
                             text = Text(
                                 text=text_item.get('text', ''),
@@ -648,84 +619,19 @@ def process_authors_data(authors_hub):
                                 viewsCount=text_item.get('viewsCount'),
                                 region=text_item.get('region')
                             )
-                            texts.append(text.dict())  # Добавляем словарь, совместимый с Pydantic
+                            texts.append(text)
                         except Exception as e:
                             print(f"Ошибка обработки текста: {e}")
 
-                author_dict['count_texts'] = len(texts)
-                author_dict['texts'] = texts
+                    author_obj = author[0]
+                    author_obj['count_texts'] = len(texts)
+                    author_obj['texts'] = texts
 
-                # Если URL автора пуст, заменяем на URL первого текста
-                if not author_dict.get('url'):
-                    author_dict['url'] = texts[0]['url'] if texts else ''
+                    if not author_obj.get('url'):
+                        author_obj['url'] = texts[0]['url'] if texts else ''
 
-            except Exception as e:
-                print(f"Ошибка обработки неуникального автора {author_name}: {e}")
-                author_dict = {
-                    'fullname': authors_hub[i][0][1][0].get('hub', ''),
-                    'url': authors_hub[i][0][1][0].get('hub', ''),
-                    'author_type': 'СМИ',
-                    'sex': '',
-                    'age': '',
-                    'count_texts': 0,
-                    'texts': []
-                }
-
-            c['author_data'].append(author_dict)
-            authors_list.append(c)
-
-        # Обработка уникальных авторов
-        for author_name in list_unique_authors:
-            c = {}
-            c['author_data'] = []
-            try:
-                author_dict = [
-                    x[0] for x in authors_hub[i]
-                    if x[0].get('fullname', x[0].get('hub', '')) == author_name
-                ][0]
-                texts_raw = [
-                    x[1] for x in authors_hub[i]
-                    if x[0].get('fullname', x[0].get('hub', '')) == author_name
-                ]
-                texts = []
-
-                # Преобразуем каждый текст в формат класса Text
-                for text_group in texts_raw:
-                    for text_item in text_group:
-                        try:
-                            text = Text(
-                                text=text_item.get('text', ''),
-                                hub=text_item.get('hub', ''),
-                                url=text_item.get('url', ''),
-                                er=text_item.get('er'),
-                                viewsCount=text_item.get('viewsCount'),
-                                region=text_item.get('region')
-                            )
-                            texts.append(text.dict())  # Добавляем словарь, совместимый с Pydantic
-                        except Exception as e:
-                            print(f"Ошибка обработки текста: {e}")
-
-                author_dict['count_texts'] = len(texts)
-                author_dict['texts'] = texts
-
-                # Если URL автора пуст, заменяем на URL первого текста
-                if not author_dict.get('url'):
-                    author_dict['url'] = texts[0]['url'] if texts else ''
-
-            except Exception as e:
-                print(f"Ошибка обработки уникального автора {author_name}: {e}")
-                author_dict = {
-                    'fullname': authors_hub[i][0][1][0].get('hub', ''),
-                    'url': authors_hub[i][0][1][0].get('hub', ''),
-                    'author_type': 'СМИ',
-                    'sex': '',
-                    'age': '',
-                    'count_texts': 0,
-                    'texts': []
-                }
-
-            c['author_data'].append(author_dict)
-            authors_list.append(c)
+                    author_data.append(author_obj)
+            authors_list.append({'author_data': author_data})
 
     return authors_list
 
@@ -2246,7 +2152,7 @@ async def llm_run(
         # Создаем task_data на основе входной модели `AnalysisRequest`
         # Преобразуем данные в строковый формат перед сохранением
         task_data = {
-            "task_id": str(task_id),
+            "task_id": task_id,
             "user_id": str(analysis_request.user_id),
             "folder_name": str(analysis_request.folder_name),
             "index": str(analysis_request.index),
@@ -2254,10 +2160,6 @@ async def llm_run(
             "min_date": str(analysis_request.min_date),
             "max_date": str(analysis_request.max_date),
             "system_prompt": analysis_request.system_prompt or "",  # Пустая строка, если не указано
-            # "example_text": analysis_request.example_text or "",
-            # "example_thematics": analysis_request.example_thematics or "",
-            # "example_question_keywords": analysis_request.example_question_keywords or "",
-            # "example_keywords": analysis_request.example_keywords or "",
             "example_question": analysis_request.example_question or "",
             "status": "pending",
             "total_texts": "0",  # Значение "0" всегда строка
@@ -2265,89 +2167,73 @@ async def llm_run(
             "progress": "0",  # Значение "0" всегда строка
         }
 
-        # Убедимся, что все значения в task_data не равны None, и преобразуем их в строки
-        task_data = {key: (str(value) if value is not None else "") for key, value in task_data.items()}
-
         # Сохраняем задачу в Redis
         await redis_db.hset(f"task:{task_id}", mapping=task_data)
         await redis_db.rpush("queue:tasks", task_id)
 
-        # Проверяем сохранение
-        saved_task = await redis_db.hgetall(f"task:{task_id}")
-        print(999000555)
-        # Преобразование байтов в строки с помощью dictionary comprehension
-        decoded_task = {key.decode('utf-8'): value.decode('utf-8') for key, value in saved_task.items()}
+        # Преобразуем данные задачи в строковый формат
+        decoded_task = {key: value for key, value in task_data.items()}
 
-        # Теперь ключи и значения в формате строк
-        print(decoded_task)
+        # Добавляем задачу в очередь на выполнение
+        background_tasks.add_task(process_task, task_id, task_data, background_tasks)
+        # background_tasks.add_task(process_task, next_task_id.decode(), next_task_data, background_tasks)
 
-        if not saved_task:
-            raise Exception(f"Ошибка сохранения данных для задачи {task_id}!") 
-        
-        await redis_db.set("gpu:status", "idle")  # Для теста, явно сбрасываем статус
-        status = await redis_db.get("gpu:status")
-        logging.info(f"Сбрасываем статус GPU: {status.decode('utf-8') if status else 'ключ отсутствует'}")
-
-        print(22555666)
-        # Проверяем статус GPU
-        if not await is_gpu_busy():
-            logging.info("GPU свободен, запускаем задачу...")
-            await set_gpu_status("busy")
-            print(111555777)
-            queue_length = await redis_db.llen("queue:tasks")
-            logging.info(f"Длина очереди задач: {queue_length}")
-            next_task_id = await redis_db.lpop("queue:tasks")
-            if next_task_id:
-                logging.info(f"Следующая задача: {next_task_id.decode('utf-8')}")
-                background_tasks.add_task(process_task, next_task_id, decoded_task)
-            else:
-                logging.warning("Очередь задач пуста.")
-        else:
-            logging.info("GPU занят, задача поставлена в очередь.")
-
-        return {"message": "Задача добавлена в очередь", "task_id": task_id, "status": "pending"}
-
+        return JSONResponse(
+            content={
+                "task_id": task_id,
+                "status": "pending",
+                "message": "Task has been added to the queue."
+            },
+            status_code=202
+        )
     except Exception as e:
-        logging.error(f"Ошибка при создании задачи: {e}")
-        return {"error": f"Ошибка: {e}"}
+        logger.error(f"Error in llm_run: {e}")
+        return JSONResponse(
+            content={
+                "error": str(e)
+            },
+            status_code=500
+        )
 
 
-async def process_task(task_id: str, task_data: dict):
+
+async def process_task(task_id: str, task_data: dict, background_tasks: BackgroundTasks):
     try:
-        print(5556667)
         logging.info(f"Начата обработка задачи: {task_id}")
 
-        # Убедимся, что task_id - в строковом формате
-        task_id = task_id if isinstance(task_id, str) else task_id.decode()
-
-        # Логируем ключ задачи
-        logging.info(f"Пытаемся получить данные задачи для ключа task:{task_id}")
-
-        # # Преобразуем значения Redis (если возвращаются байты)
-        # task_data = {k: v.decode() if isinstance(v, bytes) else v for k, v in task_data.items()}
-
         # Получаем данные задачи из Redis
-        # task_data = await redis_db.hgetall(f"task:{task_id}")
-        # if not task_data:
-        #     raise Exception(f"Задача {task_id}: данные не найдены в Redis!")
+        task_data = await redis_db.hgetall(f"task:{task_id}")
+        if not task_data:
+            raise Exception(f"Задача {task_id}: данные не найдены в Redis!")
 
         # Декодируем данные задачи
-        # task_data = {k.decode("utf-8"): v.decode("utf-8") for k, v in task_data.items()}
-        # task_data["min_date"] = int(task_data["min_date"])
-        # task_data["max_date"] = int(task_data["max_date"])
-
-        # task_data = {key.decode('utf-8'): value.decode('utf-8') for key, value in task_data.items()}
-        # print(777999888)
-        # print(task_data)
+        task_data = {k.decode("utf-8"): v.decode("utf-8") for k, v in task_data.items()}
+        task_data["min_date"] = int(task_data["min_date"])
+        task_data["max_date"] = int(task_data["max_date"])
 
         # Обновляем статус задачи
         await redis_db.hset(f"task:{task_id}", "status", "in_progress")
 
-        # Выполнение обработки (здесь пример)
+        # Выполнение обработки
         await run_llm_query(task_data)
 
         # Отмечаем задачу как завершенную
         await redis_db.hset(f"task:{task_id}", "status", "done")
+
+        # Проверяем, есть ли еще задачи в очереди
+        queue_length = await redis_db.llen("queue:tasks")
+        if queue_length > 0:
+            logging.info(f"Есть еще {queue_length} задач в очереди")
+            next_task_id = await redis_db.lpop("queue:tasks")
+            if next_task_id:
+                logging.info(f"Следующая задача: {next_task_id.decode()}")
+                next_task_data = await redis_db.hgetall(f"task:{next_task_id.decode()}")
+                next_task_data = {k.decode("utf-8"): v.decode("utf-8") for k, v in next_task_data.items()}
+                next_task_data["min_date"] = int(next_task_data["min_date"])
+                next_task_data["max_date"] = int(next_task_data["max_date"])
+                background_tasks.add_task(process_task, next_task_id.decode(), next_task_data, background_tasks)
+        else:
+            logging.info("Очередь задач пуста.")
 
     except Exception as e:
         logging.error(f"Ошибка при обработке задачи {task_id}: {e}")
@@ -2372,8 +2258,36 @@ async def get_task_status(task_id: str):
         raise HTTPException(status_code=404, detail="Задача не найдена")
 
     # Функция возвращает данные в удобном формате
-    return task_data 
+    return {key.decode("utf-8"): value.decode("utf-8") for key, value in task_data.items()}
 
+
+# Эндпойнт для сброса очереди LLM-задач
+@app.post("/reset-queue/", tags=['ai analytics'])
+async def reset_queue():
+    try:
+        # Очищаем очередь задач
+        await redis_db.delete("queue:tasks")
+
+        # Делаем все задачи, находящиеся в состоянии "in_progress", в состояние "pending"
+        task_ids = await redis_db.lrange("queue:tasks", 0, -1)
+        for task_id in task_ids:
+            await redis_db.hset(f"task:{task_id.decode()}", "status", "pending")
+
+        return JSONResponse(
+            content={
+                "message": "Очередь LLM-задач сброшена."
+            },
+            status_code=200
+        )
+    except Exception as e:
+        logger.error(f"Error in reset_queue: {e}")
+        return JSONResponse(
+            content={
+                "error": str(e)
+            },
+            status_code=500
+        )
+    
 
 @app.get("/llm-analyze", tags=['ai analytics'])
 async def llm_analyze(user_id: int, folder_name: str, file_name: str):
@@ -2444,13 +2358,19 @@ async def llm_analyze(user_id: int, folder_name: str, file_name: str):
     if info_html['query_str'] is None:
         info_html['query_str'] = 'all'
 
-    data = elastic_query(theme_index=indexes[info_html['index_number']], query_str=info_html['query_str'])
+    print(info_html['min_date'])
+    print(info_html['max_date'])
+
+    data = elastic_query(theme_index=indexes[info_html['index_number']], query_str=info_html['query_str'], 
+                         min_date=info_html['min_date'], max_date=info_html['max_date'])
     data = pd.DataFrame(data)
+
+    print(data.shape)
 
     # Обработка тематики
     df_topic = topic_model.get_topic_info()[['CustomName', 'Topic']]
     dct_df_topic = dict(zip(df_topic['Topic'], df_topic['CustomName']))
-    thematics = [dct_df_topic[x] for x in topic_model.topics_]
+    thematics = [dct_df_topic[x] for x in topic_model.topics_] 
 
     # Объединяем LLM с метаданными
     data.rename(columns={'url': 'text_url'}, inplace=True)
@@ -2499,10 +2419,13 @@ async def llm_analyze(user_id: int, folder_name: str, file_name: str):
 
     # Находим файл, в имени которых содержится выбранный html
     file = [file for file in files if file_name.replace('.html', '') in file]
+    file = file[0].replace('topic_model_', 'my_list_llm_ans_')
+    print(file)
 
     with open(texts_path + '/' + file + '.pkl', 'rb') as f:
         texts_thematics = pickle.load(f)
     df_join.insert(1, 'Тематика текста', texts_thematics)
+
 
     # Возвращение HTML файла и таблиц
     with open(html_file_path, 'r', encoding='utf-8') as file:
