@@ -96,7 +96,7 @@ async def run_llm_query(task_data: dict):
 
         # Получаем тексты и ограничиваем их количество
         texts = [x['text'] for x in data]
-        texts = texts[:50000]  # Ограничение
+        texts = texts[:100]  # Ограничение
         total_texts = len(texts)
 
         # Функция очистки текста
@@ -140,17 +140,36 @@ async def run_llm_query(task_data: dict):
                     ]
                 }
 
+                if len(text) > 25000:
+                    llm_labels.append("Длинный текст")
+                    completed_texts = len(llm_labels)
+                    progress = round((completed_texts / total_texts) * 100, 1)
+                    await redis_db.hset(f"task:{task_data['task_id']}", mapping={
+                        "completed_texts": completed_texts,
+                        "progress": progress
+                    })
+                    print("Длинный текст")
+                    return
+
                 with torch.no_grad():
                     response = await client.chat(model='Vikhr_Q3', messages=payload['messages'])
                     if response:
                         llm_labels.append(response['message']['content'])
-                        # Обновляем количество обработанных текстов и прогресс в Redis
                         completed_texts = len(llm_labels)
                         progress = round((completed_texts / total_texts) * 100, 1)
                         await redis_db.hset(f"task:{task_data['task_id']}", mapping={
                             "completed_texts": completed_texts,
                             "progress": progress
                         })
+                    else:
+                        llm_labels.append("bad response")
+                        completed_texts = len(llm_labels)
+                        progress = round((completed_texts / total_texts) * 100, 1)
+                        await redis_db.hset(f"task:{task_data['task_id']}", mapping={
+                            "completed_texts": completed_texts,
+                            "progress": progress
+                        })
+                        print("bad response")
 
         async def main():
             semaphore = asyncio.Semaphore(10)
@@ -294,7 +313,8 @@ async def run_llm_query(task_data: dict):
             "html-file": f"{indexes[int(task_data['index'])]}_{current_time}.html",
             "model-file": filename,
             "creation_date": str(creation_date.strftime("%Y-%m-%d %H:%M:%S")),
-            "execution_time": execution_time,
+            "execution_llm_time": elapsed_time,
+            "execution_all_time": execution_time,
             "query_str": task_data['query_str'], 
             "min_date": task_data['min_date'],
             "max_date": task_data['max_date'],

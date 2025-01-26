@@ -530,8 +530,6 @@ async def tonality_landscape(
 
     data = elastic_query(theme_index=indexes[index], min_date=min_date, max_date=max_date, query_str='all')
 
-    print(f"Общее количество документов: {len(data)}")
-
     # Обработка данных: заменяем значения в 'hub', если они соответствуют конкретным условиям
     for entry in data:
         if 'hub' in entry:
@@ -2196,11 +2194,8 @@ async def llm_run(
         )
 
 
-
 async def process_task(task_id: str, task_data: dict, background_tasks: BackgroundTasks):
     try:
-        logging.info(f"Начата обработка задачи: {task_id}")
-
         # Получаем данные задачи из Redis
         task_data = await redis_db.hgetall(f"task:{task_id}")
         if not task_data:
@@ -2211,30 +2206,22 @@ async def process_task(task_id: str, task_data: dict, background_tasks: Backgrou
         task_data["min_date"] = int(task_data["min_date"])
         task_data["max_date"] = int(task_data["max_date"])
 
-        # Обновляем статус задачи
-        await redis_db.hset(f"task:{task_id}", "status", "in_progress")
+        # Устанавливаем блокировку на задачу
+        if await redis_db.set(f"lock:task:{task_id}", "1", nx=True, ex=300):
+            try:
+                # Обновляем статус задачи
+                await redis_db.hset(f"task:{task_id}", "status", "in_progress")
 
-        # Выполнение обработки
-        await run_llm_query(task_data)
+                # Выполнение обработки
+                await run_llm_query(task_data)
 
-        # Отмечаем задачу как завершенную
-        await redis_db.hset(f"task:{task_id}", "status", "done")
-
-        # Проверяем, есть ли еще задачи в очереди
-        queue_length = await redis_db.llen("queue:tasks")
-        if queue_length > 0:
-            logging.info(f"Есть еще {queue_length} задач в очереди")
-            next_task_id = await redis_db.lpop("queue:tasks")
-            if next_task_id:
-                logging.info(f"Следующая задача: {next_task_id.decode()}")
-                next_task_data = await redis_db.hgetall(f"task:{next_task_id.decode()}")
-                next_task_data = {k.decode("utf-8"): v.decode("utf-8") for k, v in next_task_data.items()}
-                next_task_data["min_date"] = int(next_task_data["min_date"])
-                next_task_data["max_date"] = int(next_task_data["max_date"])
-                background_tasks.add_task(process_task, next_task_id.decode(), next_task_data, background_tasks)
+                # Отмечаем задачу как завершенную
+                await redis_db.hset(f"task:{task_id}", "status", "done")
+            finally:
+                # Удаляем блокировку
+                await redis_db.delete(f"lock:task:{task_id}")
         else:
-            logging.info("Очередь задач пуста.")
-
+            logging.info(f"Задача {task_id} уже обрабатывается, пропускаем.")
     except Exception as e:
         logging.error(f"Ошибка при обработке задачи {task_id}: {e}")
         traceback.print_exc()
@@ -2422,7 +2409,7 @@ async def llm_analyze(user_id: int, folder_name: str, file_name: str):
     file = file[0].replace('topic_model_', 'my_list_llm_ans_')
     print(file)
 
-    with open(texts_path + '/' + file + '.pkl', 'rb') as f:
+    with open(texts_path + '/' + file, 'rb') as f:
         texts_thematics = pickle.load(f)
     df_join.insert(1, 'Тематика текста', texts_thematics)
 
@@ -3287,31 +3274,53 @@ async def get_metrics():
 
 
 ########################################### Monitoring End ###############################################
-# import httpx
 
-# class GenerateRequest(BaseModel):
-#     prompt: str
-#     max_length: int
+########################################### Table LLM Start ###############################################
 
-# @app.post("/generate")
-# async def generate(request: GenerateRequest):
-#     # Формируем данные для отправки на vllm сервер
-#     vllm_endpoint = "http://localhost:8000/generate"
-#     data = {
-#         "prompt": request.prompt,
-#         "max_length": request.max_length
-#     }
+async def answer_question(query: str, documents: list):
+    """
+    Функция для ответа на вопрос, используя RAG-модель и предоставленные документы.
     
-#     async with httpx.AsyncClient() as client:
-#         # Отправляем POST запрос на сервер vllm
-#         try:
-#             response = await client.post(vllm_endpoint, json=data)
-#             response.raise_for_status()  # Проверяем наличие ошибок
-#             return response.json()  # Возвращаем результат от vllm
-#         except httpx.RequestError as exc:
-#             raise HTTPException(status_code=400, detail=f"Request error: {exc}")
-#         except httpx.HTTPStatusError as exc:
-#             raise HTTPException(status_code=exc.response.status_code, detail=f"Error response: {exc.response.text}")
+    Args:
+        query (str): Вопрос, на который нужно ответить.
+        documents (list): Список массивов с информацией о документах.
+    
+    Returns:
+        dict: Словарь с ответом на вопрос и списком релевантных документов.
+    """
+    # Создаем pipeline для работы с RAG-моделью
+    rag_pipeline = pipeline("question-answering", model="/home/dev/fastapi/analytics_app/data/LLM_models/Tables/Vikhr-Nemo-12B-Instruct-R-21-09-24")
+    
+    # Подготавливаем данные документов в нужном формате
+    docs = [{"doc_id": doc["Время"], "title": doc["Имя кластера"], "content": doc["Тематика текста"]} for doc in documents]
+    
+    # Запрашиваем ответ у RAG-модели
+    result = rag_pipeline(query, docs)
+    
+    # Формируем ответ
+    return {
+        "relevant_doc_ids": [doc["doc_id"] for doc in result["documents"]],
+        "answer": result["answer"]
+    }
+
+
+@app.post("/answer_question/", tags=['ai-tables'])
+async def handle_question(query: str, documents: list):
+    """
+    Эндпоинт для ответа на вопрос, используя RAG-модель и предоставленные документы.
+
+    Args:
+        query (str): Вопрос, на который нужно ответить.
+        documents (list): Список массивов с информацией о документах.
+
+    Returns:
+        dict: Словарь с ответом на вопрос и списком релевантных документов.
+    """
+    return await answer_question(query, documents)
+
+
+########################################### Table LLM Stop ###############################################
+
 
 
 if __name__ == "__main__":
