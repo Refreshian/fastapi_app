@@ -2278,12 +2278,12 @@ async def reset_queue():
 
 @app.get("/llm-analyze", tags=['ai analytics'])
 async def llm_analyze(user_id: int, folder_name: str, file_name: str):
-    # Получаем данные пользователя из Redis
-    user_data = await redis_db.hgetall(user_id)
-    
-    # Преобразование байтовых строк в обычные строки
-    user_data = {key.decode('utf-8'): value.decode('utf-8') for key, value in user_data.items()}
 
+    global full_data_store, aggregated_data_store
+
+    user_data = await redis_db.hgetall(str(user_id))  # Получаем данные пользователя из Redis
+
+    user_data = {key.decode('utf-8'): value.decode('utf-8') for key, value in user_data.items()}
     # Декодируем JSON-значения в словари
     for key, value in user_data.items():
         try:
@@ -2413,6 +2413,9 @@ async def llm_analyze(user_id: int, folder_name: str, file_name: str):
         texts_thematics = pickle.load(f)
     df_join.insert(1, 'Тематика текста', texts_thematics)
 
+    # Сохранение полных данных и агрегированных данных в Redis
+    await redis_db.hset(str(user_id), "full_data", json.dumps(df_join.where(pd.notnull(df_join), None).to_dict(orient='records')))
+    await redis_db.hset(str(user_id), "aggregated_data", json.dumps(result.where(pd.notnull(result), None).to_dict(orient='records')))
 
     # Возвращение HTML файла и таблиц
     with open(html_file_path, 'r', encoding='utf-8') as file:
@@ -3277,46 +3280,45 @@ async def get_metrics():
 
 ########################################### Table LLM Start ###############################################
 
-async def answer_question(query: str, documents: list):
+@app.post("/answer_question/", tags=['ai-tables'])
+async def handle_question(user_id: int, query: str):
     """
-    Функция для ответа на вопрос, используя RAG-модель и предоставленные документы.
-    
+    Эндпоинт для ответа на вопрос, используя RAG-модель и данные из Redis.
+
     Args:
+        user_id (int): ID пользователя для извлечения данных.
         query (str): Вопрос, на который нужно ответить.
-        documents (list): Список массивов с информацией о документах.
-    
+
     Returns:
         dict: Словарь с ответом на вопрос и списком релевантных документов.
     """
-    # Создаем pipeline для работы с RAG-моделью
-    rag_pipeline = pipeline("question-answering", model="/home/dev/fastapi/analytics_app/data/LLM_models/Tables/Vikhr-Nemo-12B-Instruct-R-21-09-24")
+    # Извлечение данных из Redis
+    full_data_json = await redis_db.hget(str(user_id), "full_data")
+    aggregated_data_json = await redis_db.hget(str(user_id), "aggregated_data")
+
+    if full_data_json is None or aggregated_data_json is None:
+        raise HTTPException(status_code=404, detail="User data not found")
+
+    full_data = json.loads(full_data_json)
+    aggregated_data = json.loads(aggregated_data_json)
+
+    # Запись это в документы для обработки
+    documents = full_data
+
+    # Передаем данные в функцию answer_question
+    return await answer_question(query, documents)
+
+async def answer_question(query: str, documents: List[dict]):
+    # Ваша логика для обработки вопроса
+    rag_pipeline = pipeline("question-answering", model="/home/dev/fastapi/analytics_app/data/LLM_models/Vikhr-Llama3.1-8B-Instruct-R-21-09-24")
+    docs = [{"doc_id": doc["timeCreate"], "title": doc["Имя кластера"], "content": doc["Тематика текста"]} for doc in documents]
     
-    # Подготавливаем данные документов в нужном формате
-    docs = [{"doc_id": doc["Время"], "title": doc["Имя кластера"], "content": doc["Тематика текста"]} for doc in documents]
-    
-    # Запрашиваем ответ у RAG-модели
     result = rag_pipeline(query, docs)
     
-    # Формируем ответ
     return {
         "relevant_doc_ids": [doc["doc_id"] for doc in result["documents"]],
         "answer": result["answer"]
     }
-
-
-@app.post("/answer_question/", tags=['ai-tables'])
-async def handle_question(query: str, documents: list):
-    """
-    Эндпоинт для ответа на вопрос, используя RAG-модель и предоставленные документы.
-
-    Args:
-        query (str): Вопрос, на который нужно ответить.
-        documents (list): Список массивов с информацией о документах.
-
-    Returns:
-        dict: Словарь с ответом на вопрос и списком релевантных документов.
-    """
-    return await answer_question(query, documents)
 
 
 ########################################### Table LLM Stop ###############################################
