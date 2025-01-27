@@ -320,7 +320,7 @@ class VoiceModel(BaseModel):
 
 
 class ModelVoice(BaseModel):
-    __root__: List[VoiceModel]
+    values: List[VoiceModel]
 
 # Mediarating Model
 class NegativeSmiMediaRating(BaseModel):
@@ -1082,7 +1082,7 @@ async def voice_analize(user: User = Depends(current_user), index: int = None,
 
         values.append(values_search)
 
-    return ModelVoice(__root__ = values)
+    return ModelVoice(values = values) 
 
 
 @app.get("/media-rating", tags=['data analytics'])
@@ -2033,10 +2033,10 @@ async def validation_exception_handler(request: Request, exc: RequestValidationE
     return HTMLResponse(content=f"Ошибка валидации: {exc.errors()}", status_code=422)
 
 
-def sanitize_string(input_string):
-    if input_string is None:
-        return input_string
-    return input_string.replace("'", "\\'").replace('"', '\\"')
+# def sanitize_string(input_string):
+#     if input_string is None:
+#         return input_string
+#     return input_string.replace("'", "\\'").replace('"', '\\"')
 
 # Модель для задачи
 class AnalysisRequest(BaseModel):
@@ -3009,215 +3009,103 @@ async def get_user_folders(user_id: str):
 
 
 ###########################################################################################################
+import aiohttp
 
-# Модель для задачи тестового анализа LLM
-# class AnalysisRequest(BaseModel):
-#     user_id: int
-#     folder_name: str
-#     index: int
-#     min_date: int
-#     max_date: int
-#     query_str: Optional[str] = None
-#     system_prompt: Optional[str] = None
-#     example_text: str  # Текст примера
-#     example_thematics: str  # Тематики в тексте-примере
-#     example_question_keywords: str  # Вопрос для ключевых слов текста
-#     example_keywords: str  # Ключевые слова
-#     example_question: str  # Вопрос
-#     text_ids: List[int]  # Массив идентификаторов текстов
+class SingleTextRequest(BaseModel):
+    user_id: int
+    folder_name: str
+    text: str
+    system_prompt: Optional[str] = None 
+    prompt_question: str
 
-#     def __init__(self, **data):
-#         super().__init__(**data)  # Вызываем родительский конструктор
-#         # Очищаем строковые поля
-#         self.example_text = self.clean_string(self.example_text)
-#         self.example_thematics = self.clean_string(self.example_thematics)
-#         self.example_question_keywords = self.clean_string(self.example_question_keywords)
-#         self.example_keywords = self.clean_string(self.example_keywords)
-#         self.example_question = self.clean_string(self.example_question)
+    @validator('text', 'system_prompt', 'prompt_question', pre=True)
+    def clean_strings(cls, v):
+        if v is None:
+            return v 
+        # Удаляем двойные кавычки
+        v = v.replace('"', '')
+        # Удаляем все символы, кроме букв, цифр, пробелов и основных знаков препинания
+        v = re.sub(r'[^a-zA-Zа-яА-Я0-9\s.,?!;:]', '', v)
+        # Заменяем последовательности пробелов на один пробел
+        v = re.sub(r'\s+', ' ', v)
+        return v
+    
+# Обработка LLM задачи для одного текста
+@app.post("/llm-run-single/", tags=['ai analytics'])
+async def llm_run(
+    analysis_request: SingleTextRequest,
+    background_tasks: BackgroundTasks
+):
+    try:
+        task_id = str(uuid.uuid4())
+        # Создаем task_data на основе входной модели `AnalysisRequest`
+        # Преобразуем данные в строковый формат перед сохранением
+        task_data = {
+            "task_id": task_id,
+            "user_id": str(analysis_request.user_id),
+            "folder_name": str(analysis_request.folder_name),
+            "text": str(analysis_request.text),
+            "system_prompt": str(analysis_request.system_prompt) if analysis_request.system_prompt else "",
+            "prompt_question": str(analysis_request.prompt_question),
+            "status": "pending"
+        }
 
-#     @staticmethod
-#     def clean_string(value: str) -> str:
-#         # Удаляем все нежелательные символы (в данном случае управляющие символы)
-#         if value is not None:
-#             # Удаляем неразрешенные управляющие символы
-#             value = re.sub(r'[\u0001-\u001F\u007F-\u009F]', '', value)
-#             # Дополнительно можно экранировать одинарные кавычки
-#             value = value.replace("'", "")
-#         return value
+        # Сохраняем задачу в Redis для логирования
+        await redis_db.hset(f"task:{task_id}", mapping=task_data)
 
+        # Добавляем задачу в очередь на выполнение
+        background_tasks.add_task(process_single_text_task, task_id, task_data)
 
-# async def run_llm_query(request_data: AnalysisRequest):
-#     await asyncio.sleep(0.01)
-#     et = time.time()
-#     current_time = datetime.now().strftime('%Y%m%d_%H%M%S')
-#     total_texts = 0
+        return JSONResponse(
+            content={
+                "task_id": task_id,
+                "status": "pending",
+                "message": "Task has been added to the queue."
+            },
+            status_code=202
+        )
+    except Exception as e:
+        logging.error(f"Error in llm_run_single: {e}")
+        return JSONResponse(
+            content={
+                "error": str(e)
+            },
+            status_code=500
+        )
+        
 
-#     file_path = '/home/dev/fastapi/analytics_app/data/indexes.pkl'
-#     indexes = load_dict_from_pickle(file_path)
+async def process_single_text_task(task_id: str, task_data: dict):
+    try:
+        # Получаем текст запроса
+        text = task_data['text']
+        prompt_question = task_data['prompt_question']
 
-#     # Выполняем поиск текстов
-#     if request_data.query_str is not None and request_data.query_str != '' and request_data.query_str != 'all':
-#         data = elastic_query(theme_index=indexes[request_data.index], query_str=request_data.query_str)
-#     else:
-#         data = elastic_query(theme_index=indexes[request_data.index], query_str='all')
+        # Формируем запрос к LLM
+        await generate_answers(text, prompt_question)
 
-#     # Фильтруем данные по дате
-#     data = [x for x in data if request_data.min_date <= x['timeCreate'] <= request_data.max_date]
-
-#     # Получение текстов по идентификаторам
-#     texts = [x['text'] for x in data]  
-#     texts = [texts[x] for x in request_data.text_ids]# Используем text_ids для фильтрации
-#     total_texts = len(texts)
-
-#     print('Всего текстов: {}'.format(total_texts))
-
-#     tokenizer = AutoTokenizer.from_pretrained("/home/dev/fastapi/analytics_app/data/LLM_models/Meta-Llama-3-8B-Instruct")
-#     bnb_config = transformers.BitsAndBytesConfig(
-#         load_in_4bit=True,
-#         bnb_4bit_quant_type='nf4',
-#         bnb_4bit_use_double_quant=True,
-#         bnb_4bit_compute_dtype=torch.bfloat16
-#     )
-
-#     model = transformers.AutoModelForCausalLM.from_pretrained(
-#         "/home/dev/fastapi/analytics_app/data/LLM_models/Meta-Llama-3-8B-Instruct",
-#         trust_remote_code=True,
-#         quantization_config=bnb_config,
-#         device_map='auto',
-#     )
-
-#     # Проверка значений примера
-#     if not all([
-#         request_data.example_text,
-#         request_data.example_question_keywords,
-#         request_data.example_keywords,
-#         request_data.example_question,
-#         request_data.example_thematics
-#     ]):
-#         raise ValueError("Пожалуйста, убедитесь, что все поля примеров заполнены корректно.")
-
-#     # Формируем system_prompt
-#     if request_data.system_prompt is None or request_data.system_prompt == "":
-#         request_data.system_prompt = """
-#             <s>[INST] <<SYS>>
-#             You are a helpful, respectful and honest assistant for labeling topics.
-#             <</SYS>>
-#             """
-
-#     request_data.system_prompt = f"""
-#     <s>[INST] <<SYS>>
-#     {request_data.system_prompt}
-#     <</SYS>>"""
-
-#     # Формируем example_prompt
-#     example_prompt = f"""
-#         У меня есть следующий текст:
-#         {request_data.example_text}
-
-#         {request_data.example_question_keywords}: {request_data.example_keywords}.
-
-#         {request_data.example_question}
-
-#         [/INST] {request_data.example_thematics}
-#         """
-
-#     pipe = pipeline(
-#         model=model,
-#         tokenizer=tokenizer,
-#         task='text-generation',
-#         temperature=0.1,
-#         max_new_tokens=500,
-#         repetition_penalty=1.1,
-#     )
-#     # Установите pad_token_id
-#     pipe.tokenizer.pad_token_id = pipe.model.config.eos_token_id 
-
-#     # Основной промт с заменами промтов
-#     llm_answer = []
-#     processed_texts = {}
-
-#     def check_similarity_and_process(single_text, threshold=0.8):
-#         if single_text in processed_texts:
-#             return processed_texts[single_text]
-
-#         df_meta = pd.DataFrame({'text': [single_text]})
-
-#         if len(processed_texts) > 0:
-#             df_existing = pd.DataFrame(list(processed_texts.keys()), columns=['text'])
-#             combined_df = pd.concat([df_meta, df_existing], ignore_index=True)
-
-#             count_vectorizer = CountVectorizer()
-#             vector_matrix = count_vectorizer.fit_transform(combined_df['text'].values)
-#             cosine_similarity_matrix = cosine_similarity(vector_matrix)
-
-#             for i in range(len(cosine_similarity_matrix)):
-#                 cosine_similarity_matrix[i][i] = 0
-
-#             similar_indices = np.where(cosine_similarity_matrix[0] >= threshold)[0]
-#             if len(similar_indices) > 0:
-#                 return processed_texts[combined_df.iloc[similar_indices[0]]['text']]
-
-#         messages = [
-#             {
-#                 "role": "system",
-#                 "content": f"{request_data.system_prompt} {' '} {example_prompt} У меня есть следующий текст: {single_text} {request_data.example_question_keywords}: {request_data.example_keywords}. {request_data.example_question}"
-#             }
-#         ]
-
-#         torch.cuda.empty_cache()
-
-#         with torch.no_grad():
-#             response = pipe(messages, num_return_sequences=1)
-
-#         result_text = response[0]['generated_text'][1]['content'].replace('[/INST]\n', '').replace('\n', '')
-#         processed_texts[single_text] = result_text
-#         return result_text
-
-#     for i in range(total_texts):
-#         single_text = texts[i]
-
-#         if len(single_text) < 15000:
-#             await asyncio.sleep(0.01)
-#             answer = check_similarity_and_process(single_text)
-#             llm_answer.append(answer)
-#         else:
-#             llm_answer.append('Длинный текст')
-
-#     return llm_answer
+        # Если необходимо, обновляем статус задачи как завершенную
+        await redis_db.hset(f"task:{task_id}", "status", "done")
+    except Exception as e:
+        logging.error(f"Ошибка при обработке задачи {task_id}: {e}")
+        await redis_db.hset(f"task:{task_id}", "status", f"failed: {str(e)}")
 
 
-# @app.post("/llm-test/")
-# async def llm_run_test(background_tasks: BackgroundTasks, user_id: int, folder_name: str, index: int,
-#                        min_date: int, max_date: int,
-#                        query_str: Optional[str] = None,
-#                        system_prompt: Optional[str] = None,
-#                        example_text: str = None,
-#                        example_question_keywords: str = None,
-#                        example_keywords: str = None,
-#                        example_thematics: str = None,
-#                        example_question: str = None,
-#                        text_ids: List[int] = []):  # Новый параметр text_ids
-#     try:
-#         request_data = AnalysisRequest(
-#             user_id=user_id,
-#             folder_name=folder_name,
-#             index=index,
-#             min_date=min_date,
-#             max_date=max_date,
-#             query_str=query_str,
-#             system_prompt=system_prompt,
-#             example_text=example_text,
-#             example_thematics=example_thematics,
-#             example_question_keywords=example_question_keywords,
-#             example_keywords=example_keywords,
-#             example_question=example_question,
-#             text_ids=text_ids  # Передаем идентификаторы текстов
-#         )
-
-#         llm_answers = await run_llm_query(request_data)
-#         return {"llm_answers": llm_answers}
-#     except ValidationError as e:
-#         return {"error": str(e)}
+async def generate_answers(text: str, prompt_question: str):
+    url = "http://localhost:11434/api/generate"
+    payload = {
+        "model": "Vikhr_Q3",
+        "prompt": f"{text}\n\n{prompt_question}",
+        "stream": False
+    }
+    async with aiohttp.ClientSession() as session:
+        async with session.post(url, json=payload) as response:
+            if response.status == 200:
+                response_json = await response.json()
+                # Обработка ответа от LLM
+                result = response_json.get("response", "")
+                print(f"Ответ LLM: {result}")  # Здесь можете обработать результат по вашему усмотрению
+            else:
+                print(f"Ошибка при запросе к LLM: {response.status}")
 
 
 ########################################### Monitoring ###############################################
@@ -3244,105 +3132,7 @@ async def get_metrics():
         "available_memory": memory_info.available,
     }
 
-########################################### Monitoring End ###############################################
-
-
-########################################### Grafana Prometheus ###############################################
-
-# import asyncpg
-# # ---------- Подключение PostgreSQL ----------
-# instrumentator = Instrumentator(
-#     should_group_status_codes=False,  # Группировка кодов ответов, при необходимости
-#     should_ignore_untemplated=True    # Игнорировать пути без шаблонов
-# )
-# instrumentator.instrument(app).expose(app)
-
-# # ---------- Настройка PostgreSQL ----------
-# DB_CONFIG = {
-#     "user": "postgres",
-#     "password": "ffsfds&fdv12w",
-#     "database": "datadb",
-#     "host": "localhost",
-#     "port": "5432",
-# }
-
-# postgres_pool = None
-
-# @app.on_event("startup")
-# async def startup():
-#     global postgres_pool
-#     postgres_pool = await asyncpg.create_pool(**DB_CONFIG)
-
-# @app.on_event("shutdown")
-# async def shutdown():
-#     global postgres_pool
-#     if postgres_pool:
-#         await postgres_pool.close()
-
-# # ---------- Обработка запросов ----------
-# class DataRequest(BaseModel):
-#     key: str
-#     value: str
-
-
-# @app.post("/data/")
-# async def set_data(request: DataRequest):
-#     redis_db.set(request.key, request.value)
-#     return {"message": "Data saved!"}
-
-
-# @app.get("/data/{key}")
-# async def get_data(key: str):
-#     value = redis_db.get(key)
-#     return {"key": key, "value": value}
-
-
-########################################### Monitoring End ###############################################
-
-########################################### Table LLM Start ###############################################
-
-@app.post("/answer_question/", tags=['ai-tables'])
-async def handle_question(user_id: int, query: str):
-    """
-    Эндпоинт для ответа на вопрос, используя RAG-модель и данные из Redis.
-
-    Args:
-        user_id (int): ID пользователя для извлечения данных.
-        query (str): Вопрос, на который нужно ответить.
-
-    Returns:
-        dict: Словарь с ответом на вопрос и списком релевантных документов.
-    """
-    # Извлечение данных из Redis
-    full_data_json = await redis_db.hget(str(user_id), "full_data")
-    aggregated_data_json = await redis_db.hget(str(user_id), "aggregated_data")
-
-    if full_data_json is None or aggregated_data_json is None:
-        raise HTTPException(status_code=404, detail="User data not found")
-
-    full_data = json.loads(full_data_json)
-    aggregated_data = json.loads(aggregated_data_json)
-
-    # Запись это в документы для обработки
-    documents = full_data
-
-    # Передаем данные в функцию answer_question
-    return await answer_question(query, documents)
-
-async def answer_question(query: str, documents: List[dict]):
-    # Ваша логика для обработки вопроса
-    rag_pipeline = pipeline("question-answering", model="/home/dev/fastapi/analytics_app/data/LLM_models/Vikhr-Llama3.1-8B-Instruct-R-21-09-24")
-    docs = [{"doc_id": doc["timeCreate"], "title": doc["Имя кластера"], "content": doc["Тематика текста"]} for doc in documents]
-    
-    result = rag_pipeline(query, docs)
-    
-    return {
-        "relevant_doc_ids": [doc["doc_id"] for doc in result["documents"]],
-        "answer": result["answer"]
-    }
-
-
-########################################### Table LLM Stop ###############################################
+########################################### Monitoring  End ###############################################
 
 
 
