@@ -74,6 +74,8 @@ async def generate_answers(client, prompt):
                 return None
 
 from ollama import AsyncClient
+from collections import OrderedDict
+from typing import List, Dict
 
 async def run_llm_query(task_data: dict):
     """Обрабатывает LLM-запрос с обновлением статуса задачи в Redis."""
@@ -91,12 +93,16 @@ async def run_llm_query(task_data: dict):
             for query in search:
                 data.extend(elastic_query(theme_index=indexes[int(task_data['index'])], query_str=query))
         else:
-            data = elastic_query(theme_index=indexes[int(task_data['index'])], query_str='all', 
-                                 min_date=task_data['min_date'], max_date=task_data['max_date'])
+            data = elastic_query(
+                theme_index=indexes[int(task_data['index'])],
+                query_str='all',
+                min_date=task_data['min_date'],
+                max_date=task_data['max_date']
+            )
 
         # Получаем тексты и ограничиваем их количество
         texts = [x['text'] for x in data]
-        texts = texts[:50000]  # Ограничение
+        texts = texts[:100]  # Ограничение
         total_texts = len(texts)
 
         # Функция очистки текста
@@ -109,7 +115,7 @@ async def run_llm_query(task_data: dict):
             return text
 
         texts = [preprocess_text(x) for x in texts]
-        print('Всего текстов: {}'.format(total_texts)) 
+        print('Всего текстов: {}'.format(total_texts))
         et = time.time()
 
         # Обновляем начальный статус задачи в Redis
@@ -120,11 +126,28 @@ async def run_llm_query(task_data: dict):
             "progress": 0,
         })
 
-        llm_labels = []
+        # Шаг 1: Дедупликация текстов
+        unique_texts_dict: Dict[str, List[int]] = OrderedDict()
+        for idx, text in enumerate(texts):
+            if text not in unique_texts_dict:
+                unique_texts_dict[text] = [idx]
+            else:
+                unique_texts_dict[text].append(idx)
+
+        unique_texts = list(unique_texts_dict.keys())
+        unique_total = len(unique_texts)
+
+        llm_labels = [None] * total_texts  # Инициализируем список меток
+
         client = AsyncClient(host='http://localhost:11434')  # Создаем клиент один раз
 
-        async def generate_answers(text, semaphore):
-            async with semaphore:
+        semaphore = asyncio.Semaphore(10)  # Ограничение на количество одновременных запросов
+
+        async def process_unique_text(index, text):
+            if len(text) > 25000:
+                label = "Длинный текст"
+                print("Длинный текст")
+            else:
                 payload = {
                     "model": "Vikhr_Q3",
                     "messages": [
@@ -133,60 +156,71 @@ async def run_llm_query(task_data: dict):
                             "content": (
                                 f"У меня есть следующий текст:\n"
                                 f"{text}\n\n"
-                                "Есть ли в тексте фобии (страхи, предубеждения, опасения и т.д.) перед искусственным интеллектом (ИИ)? "
-                                "Если есть - напиши кратко заголовок об этой фобии. Не пиши вводные в стиле 'В предоставленно тексте' и тп"
-                                "Пиши только заголовок, напиши кратко в 1 предложение."
-                                # "Если в сформированном заголовке нет фобии, то пиши 'Фобии перед ИИ нет'"
+                                f"{task_data['promt_question']}"
                             )
                         }
                     ]
                 }
 
-                if len(text) > 25000:
-                    llm_labels.append("Длинный текст")
-                    completed_texts = len(llm_labels)
-                    progress = round((completed_texts / total_texts) * 100, 1)
-                    await redis_db.hset(f"task:{task_data['task_id']}", mapping={
-                        "completed_texts": completed_texts,
-                        "progress": progress
-                    })
-                    print("Длинный текст")
-                    return
-
                 with torch.no_grad():
                     response = await client.chat(model='Vikhr_Q3', messages=payload['messages'])
                     if response:
-                        llm_labels.append(response['message']['content'])
-                        completed_texts = len(llm_labels)
-                        progress = round((completed_texts / total_texts) * 100, 1)
-                        await redis_db.hset(f"task:{task_data['task_id']}", mapping={
-                            "completed_texts": completed_texts,
-                            "progress": progress
-                        })
+                        label = response['message']['content']
                     else:
-                        llm_labels.append("bad response")
-                        completed_texts = len(llm_labels)
-                        progress = round((completed_texts / total_texts) * 100, 1)
-                        await redis_db.hset(f"task:{task_data['task_id']}", mapping={
-                            "completed_texts": completed_texts,
-                            "progress": progress
-                        })
+                        label = "bad response"
                         print("bad response")
 
+            # Назначаем метку всем индексам, где встречается этот текст
+            for idx in unique_texts_dict[text]:
+                llm_labels[idx] = label
+
+            # Обновляем статус задачи в Redis
+            completed = sum(1 for label in llm_labels if label is not None)
+            progress = round((completed / total_texts) * 100, 1)
+            await redis_db.hset(f"task:{task_data['task_id']}", mapping={
+                "completed_texts": completed,
+                "progress": progress
+            })
+
         async def main():
-            semaphore = asyncio.Semaphore(10)
-            tasks = [generate_answers(text, semaphore) for text in texts]
+            tasks = []
+            for i, text in enumerate(unique_texts):
+                task = asyncio.create_task(generate_with_semaphore(i, text))
+                tasks.append(task)
             await asyncio.gather(*tasks)
+
+        async def generate_with_semaphore(index, text):
+            async with semaphore:
+                await process_unique_text(index, text)
 
         await main()
 
+        # # Закрываем клиент после завершения всех запросов
+        # await client.aclose()
+
         print(llm_labels[:5])
-        elapsed_time = time.time() - et 
+        elapsed_time = time.time() - et
         print('Execution LLM time:', elapsed_time, 'seconds')
 
         # Обновляем статус задачи в Redis после завершения всех запросов
-        await redis_db.hset(f"task:{task_data['task_id']}", mapping={"status": "done", "completed_texts": total_texts, "progress": 100})
-                
+        await redis_db.hset(f"task:{task_data['task_id']}", mapping={
+            "status": "done",
+            "completed_texts": total_texts,
+            "progress": 100
+        })
+
+        print('Текстов в llm_labels: {}'.format(len(llm_labels))) 
+
+        print(llm_labels[:5])
+        elapsed_time = time.time() - et 
+        total_seconds = int(elapsed_time)
+        hours = total_seconds // 3600
+        minutes = (total_seconds % 3600) // 60
+        seconds = total_seconds % 60
+        execution_llm_time = f"{hours} ч. {minutes} мин. {seconds} сек."
+        print('Execution LLM time:', execution_llm_time)
+
+
         llm_labels = [re.sub(r"[^\w\s\"«»']", "", label.strip()) for label in llm_labels if label.strip()]
 
         gc.collect()
@@ -293,8 +327,13 @@ async def run_llm_query(task_data: dict):
         hours = total_seconds // 3600
         minutes = (total_seconds % 3600) // 60
         seconds = total_seconds % 60
-        execution_time = f"{hours} ч. {minutes} мин. {seconds} сек."
-        print('Execution All time:', execution_time, 'seconds')
+        execution_all_time = f"{hours} ч. {minutes} мин. {seconds} сек."
+        print('Execution All time:', execution_all_time, 'seconds')
+
+        # hours_elapsed_time = elapsed_time // 3600
+        # minutes_elapsed_time = (elapsed_time % 3600) // 60
+        # seconds_elapsed_time = elapsed_time % 60
+        # execution_llmall_time = f"{hours_elapsed_time} ч. {minutes_elapsed_time} мин. {seconds_elapsed_time} сек."
 
         try:
             os.chdir(file_location)
@@ -316,13 +355,16 @@ async def run_llm_query(task_data: dict):
             "html-file": f"{indexes[int(task_data['index'])]}_{current_time}.html",
             "model-file": filename,
             "creation_date": str(creation_date.strftime("%Y-%m-%d %H:%M:%S")),
-            "execution_llm_time": elapsed_time,
-            "execution_all_time": execution_time,
-            "query_str": task_data['query_str'], 
+            "execution_llm_time": execution_llm_time,
+            "execution_all_time": execution_all_time, 
             "min_date": task_data['min_date'],
             "max_date": task_data['max_date'],
             "index_number": int(task_data['index']),
             "task_id": task_data['task_id'],
+            "query_str": task_data['query_str'],
+            "count_texts": total_texts,
+            "unique_texts": unique_total,
+            "promt_question": task_data['promt_question'],
         }
 
         if user_data:

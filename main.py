@@ -280,6 +280,8 @@ class ModelInfGraph(BaseModel):
     post: bool
     repost: bool
     SMI: bool
+    num_messages: int 
+    num_unique_authors: int
 
 
 # Themes Model
@@ -626,7 +628,8 @@ def process_authors_data(authors_hub):
                     author_obj['texts'] = texts
 
                     if not author_obj.get('url'):
-                        author_obj['url'] = texts[0]['url'] if texts else ''
+                        # Здесь исправлено обращение к атрибуту объекта Text
+                        author_obj['url'] = texts[0].url if texts else ''
 
                     author_data.append(author_obj)
             authors_list.append({'author_data': author_data})
@@ -650,6 +653,7 @@ async def information_graph(index: int=None,
 
     # отфильтровываем по необходимой дате из календаря
     data = [x for x in data if min_date <= x['timeCreate'] <= max_date]
+    num_messages = len(data)
     
     if post == None:
         post = False
@@ -798,7 +802,24 @@ async def information_graph(index: int=None,
     for key in dynamicdata_audience.keys():
         dynamicdata_audience[key] = dict(zip([int(x[0]) for x in dynamicdata_audience[key].items()], [str(x) for x in sum_data([int(x[1]) for x in dynamicdata_audience[key].items()])]))
 
-    values = ModelInfGraph(values=data, post=post, repost=repost, SMI=SMI, dynamicdata_audience=dynamicdata_audience)
+    # Подсчет количества сообщений
+    print(f"Количество сообщений: {num_messages}")
+
+    def count_unique_authors(data):
+        authors = set()
+        for item in data:
+            authors.add(item['author']['fullname'])
+            if 'reposts' in item and item['reposts']:
+                for repost in item['reposts']:
+                    authors.add(repost['fullname'])
+        return len(authors)
+
+    num_unique_authors = count_unique_authors(data)
+
+    print(f"Количество уникальных авторов: {num_unique_authors}")
+
+    values = ModelInfGraph(values=data, post=post, repost=repost, SMI=SMI, dynamicdata_audience=dynamicdata_audience, 
+                           num_messages=num_messages, num_unique_authors=num_unique_authors)
     return  values
 
 
@@ -2030,7 +2051,7 @@ class AnalysisRequest(BaseModel):
     # example_thematics: str  # Тематики в тексте-примере
     # example_question_keywords: str  # Вопрос для ключевых слов текста
     # example_keywords: str  # Ключевые слова
-    example_question: str  # Вопрос
+    promt_question: str  # Вопрос
 
     def __init__(self, **data):
         super().__init__(**data)  # Вызываем родительский конструктор
@@ -2039,7 +2060,7 @@ class AnalysisRequest(BaseModel):
         # self.example_thematics = self.clean_string(self.example_thematics)
         # self.example_question_keywords = self.clean_string(self.example_question_keywords)
         # self.example_keywords = self.clean_string(self.example_keywords)
-        self.example_question = self.clean_string(self.example_question)
+        self.promt_question = self.clean_string(self.promt_question)
 
     @staticmethod
     def clean_string(value: str) -> str:
@@ -2158,7 +2179,7 @@ async def llm_run(
             "min_date": str(analysis_request.min_date),
             "max_date": str(analysis_request.max_date),
             "system_prompt": analysis_request.system_prompt or "",  # Пустая строка, если не указано
-            "example_question": analysis_request.example_question or "",
+            "promt_question": analysis_request.promt_question or "",
             "status": "pending",
             "total_texts": "0",  # Значение "0" всегда строка
             "completed_texts": "0",  # Значение "0" всегда строка
