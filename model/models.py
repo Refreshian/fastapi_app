@@ -27,3 +27,14 @@ user = Table(
     Column("is_verified", Boolean, default=False, nullable=False),
     Column("theme_rules", JSON),
 )
+
+embeddings = Table(
+    "embeddings",
+    metadata,
+    Column("id", Integer, primary_key=True),
+    Column("user_id", Integer, ForeignKey(user.c.id), nullable=False),  # Установлен внешний ключ на таблицу user
+    Column("filename", String(255), nullable=False),
+    Column("folder_name", String(255), nullable=False),
+    Column("embedding", LargeBinary, nullable=False),
+    Column("created_at", TIMESTAMP, default=datetime.utcnow),
+)

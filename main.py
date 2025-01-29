@@ -111,7 +111,7 @@ from prometheus_fastapi_instrumentator import Instrumentator
 
 # os.environ["PYTORCH_CUDA_ALLOC_CONF"] = "max_split_size_mb:50"
 os.environ["SUNO_USE_SMALL_MODELS"] = "True"
-
+ 
 DATABASE_URL = f"postgresql+asyncpg://{DB_USER}:{DB_PASS}@{DB_HOST}:{DB_PORT}/{DB_NAME}"
 engine = create_async_engine(DATABASE_URL)
 async_session_maker = sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
@@ -2365,15 +2365,12 @@ async def llm_analyze(user_id: int, folder_name: str, file_name: str):
     # делаем запрос на текстовый поиск
     if info_html['query_str'] is None:
         info_html['query_str'] = 'all'
-
-    print(info_html['min_date'])
-    print(info_html['max_date'])
+    # print(info_html['min_date'])
+    # print(info_html['max_date'])
 
     data = elastic_query(theme_index=indexes[info_html['index_number']], query_str=info_html['query_str'], 
                          min_date=info_html['min_date'], max_date=info_html['max_date'])
     data = pd.DataFrame(data)
-
-    print(data.shape)
 
     # Обработка тематики
     df_topic = topic_model.get_topic_info()[['CustomName', 'Topic']]
@@ -2392,16 +2389,16 @@ async def llm_analyze(user_id: int, folder_name: str, file_name: str):
     # Получение полной таблицы
     df_join = pd.DataFrame(thematics).join(data, how='inner', lsuffix='_df1', rsuffix='_df2')
     df_join.columns = ['Имя кластера', 'Время', 'Источник', 'Ссылка на автора', 'Автор', 'Ссылка на текст', 'Тип автора', 'Пол', 'Возраст',
-                       'Тип источника', 'Аудитория', 'Комментариев', 'Репостов', 'Лайков', 'Вовлеченность', 'Просмотров',
+                       'Тип источника', 'Комментариев', 'Аудитория', 'Репостов', 'Лайков', 'Вовлеченность', 'Просмотров',
                        'Аудитория СМИ', 'Тональность', 'Страна', 'Регион']
 
     df_join.drop('Аудитория СМИ', axis=1, inplace=True)
     df_join['Тональность'] = df_join['Тональность'].map({0: 'Нейтральная', -1: 'Негатив', 1: 'Позитив'})
 
     # Получение агрегированной таблицы
-    df_group = df_join[['Имя кластера', 'Аудитория', 'Комментариев', 'Репостов', 'Лайков', 'Вовлеченность', 'Просмотров']].copy()
+    df_group = df_join[['Имя кластера', 'Комментариев', 'Аудитория', 'Репостов', 'Лайков', 'Вовлеченность', 'Просмотров']].copy()
     
-    numerical_columns = ['Аудитория', 'Комментариев', 'Репостов', 'Лайков', 'Вовлеченность', 'Просмотров']
+    numerical_columns = ['Комментариев', 'Аудитория', 'Репостов', 'Лайков', 'Вовлеченность', 'Просмотров']
     
     for column in numerical_columns:
         df_group[column] = pd.to_numeric(df_group[column], errors='coerce')
@@ -3111,7 +3108,7 @@ async def generate_answers(text: str, prompt_question: str):
 ########################################### Monitoring ###############################################
 
 @app.get("/gpu_metrics", tags=['metrics'])
-async def get_gpu_metrics():
+async def get_gpu_metrics(): 
     try:
         result = subprocess.run(['nvidia-smi', '--query-gpu=utilization.gpu,memory.used,memory.free', '--format=csv,noheader,nounits'], 
                                 stdout=subprocess.PIPE, stderr=subprocess.PIPE)
@@ -3134,6 +3131,275 @@ async def get_metrics():
 
 ########################################### Monitoring  End ###############################################
 
+from sqlalchemy import text
+from sklearn.cluster import DBSCAN
+# from sklearn.metrics.pairwise import cosine_similarity
+from scipy.cluster.hierarchy import fcluster, linkage
+from sklearn.metrics import silhouette_score
+from typing import List, Dict
+from sklearn.cluster import KMeans
+from sklearn.feature_extraction.text import TfidfVectorizer
+from sklearn.metrics.pairwise import cosine_similarity
+from sklearn.cluster import DBSCAN
+
+
+# async def get_embeddings(user_id: int, filename: str, session: AsyncSession) -> Dict[int, List[int]]:
+#     query = text("""
+#     SELECT embedding FROM embeddings
+#     WHERE user_id = :user_id AND filename = :filename
+#     """)
+
+#     result = await session.execute(query, {'user_id': user_id, 'filename': filename})
+#     data = result.fetchall()
+
+#     embeddings = [pickle.loads(row[0]) for row in data]
+
+#     print(f'Количество эмбеддингов: {len(embeddings)}')
+#     print(f'Тип данных embeddings: {type(embeddings)}')
+
+#     if not embeddings:
+#         return {}
+
+#     # Преобразование списка эмбеддингов в массив numpy
+#     embeddings_array = np.array(embeddings)
+
+#     best_n_clusters = 0
+#     best_score = -1
+#     cluster_labels = []
+
+#     # Здесь вы можете изменить верхнюю границу, чтобы получить больше кластеров
+#     for n_clusters in range(2, min(50, len(embeddings_array))):  # Изменение верхней границы на 50
+#         kmeans = KMeans(n_clusters=n_clusters, random_state=42)
+#         labels = kmeans.fit_predict(embeddings_array)
+        
+#         silhouette_avg = silhouette_score(embeddings_array, labels)
+
+#         if silhouette_avg > best_score:
+#             best_score = silhouette_avg
+#             best_n_clusters = n_clusters
+#             cluster_labels = labels
+
+#     # Создание словаря с порядковыми номерами эмбеддингов, распределёнными по кластерам
+#     clusters = {i: [] for i in range(best_n_clusters)}
+#     for idx, label in enumerate(cluster_labels):
+#         clusters[label].append(idx)  # Используем индекс вместо id из базы данных
+
+#     return clusters
+
+# # Эндпойнт для получения кластеров
+# @app.get("/clusters/", tags=['ai analytics'])
+# async def get_clusters(user_id: int, filename: str, n_clusters: int = 10, session: AsyncSession = Depends(get_db)):
+#     if user_id < 1:
+#         raise HTTPException(status_code=400, detail="user_id must be a positive integer.")
+
+#     clusters = await get_embeddings(user_id, filename, session)
+
+#     if not clusters:
+#         raise HTTPException(status_code=404, detail="Embeddings not found or clustering failed.")
+
+#     return {"clusters": clusters}
+
+
+# # Эндпойнт для получения кластеров
+# @app.get("/clusters/", tags=['ai analytics'])
+# async def get_clusters(user_id: int, filename: str, session: AsyncSession = Depends(get_db)):
+#     if user_id < 1:
+#         raise HTTPException(status_code=400, detail="user_id must be a positive integer.")
+
+#     clusters = await get_embeddings(user_id, filename, session)
+
+#     if not clusters:
+#         raise HTTPException(status_code=404, detail="Embeddings not found or clustering failed.")
+    
+#     return {"clusters": clusters}
+
+
+async def get_texts(user_id: int, folder_name: str, file_name: str, session: AsyncSession) -> list:
+    # Здесь должен быть ваш код для получения текстов из базы данных или файлов
+    # Пример ниже – просто заглушка, замените на свою логику получения текстов
+    file_name = f"my_list_llm_ans_{file_name}".replace('.html', '.pkl')
+    file_path = f"/home/dev/fastapi/analytics_app/data/{user_id}/bertopic_files_directory/{folder_name}/{file_name}"
+    print(file_path)
+    if not os.path.exists(file_path):
+        raise HTTPException(status_code=404, detail="File not found.")
+    
+    with open(file_path, 'rb') as f:
+        texts = pickle.load(f)  # Предполагается, что файл содержит список текстов
+    return texts
+
+@app.get("/text_clusters/", tags=['ai analytics'])
+async def get_text_clusters(user_id: int, folder_name: str, file_name: str, 
+                            session: AsyncSession = Depends(get_db), threshold: float = 0.8):
+    if user_id < 1:
+        raise HTTPException(status_code=400, detail="user_id must be a positive integer.")
+    
+    texts = await get_texts(user_id, folder_name, file_name, session)
+
+    if not texts:
+        raise HTTPException(status_code=404, detail="No texts found for clustering.")
+
+    # Векторизация текстов с помощью TF-IDF
+    vectorizer = TfidfVectorizer()
+    tfidf_matrix = vectorizer.fit_transform(texts)
+
+    # Вычисление косинусного сходства
+    cos_sim = cosine_similarity(tfidf_matrix)
+
+    # Преобразование сходства в расстояние
+    cos_dist = 1 - cos_sim
+    cos_dist = np.clip(cos_dist, 0, None)  
+
+    # Кластеризация с использованием DBSCAN
+    dbscan = DBSCAN(metric='precomputed', eps=threshold, min_samples=2)
+    labels = dbscan.fit_predict(cos_dist)
+
+    # Создание словаря кластеров
+    # clusters = {}
+    # for idx, label in enumerate(labels):
+    #     # Преобразуем label в строку если это необходимо
+    #     label_key = str(label)
+    #     if label_key not in clusters:
+    #         clusters[label_key] = []
+    #     clusters[label_key].append(texts[idx])  # Добавляем текст в соответствующий кластер
+    
+    # Создание списка для хранения результатов
+    results = []
+    for idx, label in enumerate(labels):
+        results.append((label, texts[idx]))  # Кортеж (номер кластера, текст)
+
+    # Преобразуем кластеры, чтобы убедиться, что все значения сериализуемы
+    # serializable_clusters = {k: list(map(str, v)) for k, v in clusters.items()}
+
+    user_data = await redis_db.hgetall(str(user_id))  # Получаем данные пользователя из Redis
+
+    user_data = {key.decode('utf-8'): value.decode('utf-8') for key, value in user_data.items()}
+    # Декодируем JSON-значения в словари
+    for key, value in user_data.items():
+        try:
+            user_data[key] = json.loads(value)
+        except json.JSONDecodeError:
+            print(f"Ошибка декодирования JSON для ключа {key}: {value}")
+
+    if user_data is None:
+        raise HTTPException(status_code=404, detail="User not found")
+
+    # Находим нужный HTML-файл
+    html_files = user_data["bertopic_files_directory"].get(folder_name, [])
+    html_file_path = None
+
+    info_html = {}  # для использования далее в elasticsearch
+    # Ищем файл по указанному имени
+    for file_info in html_files:
+        if file_info["html-file"] == file_name:
+            info_html = file_info
+            html_file_path = os.path.join("/home/dev/fastapi/analytics_app/data", str(user_id), 
+                                           "bertopic_files_directory", folder_name, file_name)
+            break
+
+    if html_file_path is None or not os.path.exists(html_file_path):
+        raise HTTPException(status_code=404, detail="HTML file not found")
+
+    # Поиск в elastic за те же даты и строку поиска
+    # Путь к файлу с темами 
+    file_path = '/home/dev/fastapi/analytics_app/data/indexes.pkl'
+    # Загрузка словаря с темами
+    indexes = load_dict_from_pickle(file_path)
+    
+    # делаем запрос на текстовый поиск
+    if info_html['query_str'] is None:
+        info_html['query_str'] = 'all'
+    # print(info_html['min_date'])
+    # print(info_html['max_date'])
+
+    data = elastic_query(theme_index=indexes[info_html['index_number']], query_str=info_html['query_str'], 
+                         min_date=info_html['min_date'], max_date=info_html['max_date'])
+    data = pd.DataFrame(data)
+
+    # Объединяем LLM с метаданными
+    data.rename(columns={'url': 'text_url'}, inplace=True)
+    data = data.join(pd.DataFrame(list(data['authorObject'].values)))
+    data.rename(columns={'url': 'author_url'}, inplace=True)
+    # data = data[['timeCreate', 'hub', 'author_url', 'fullname', 'text_url', 'author_type', 'sex', 'age',
+    #                'hubtype', 'commentsCount', 'audienceCount',
+    #                'repostsCount', 'likesCount', 'er', 'viewsCount',
+    #                'massMediaAudience', 'toneMark', 'country', 'region']]
+
+    data = data[['timeCreate', 'hub', 'author_url', 'fullname', 'text_url', 'author_type', 'sex', 'age',
+                   'hubtype', 'commentsCount', 'audienceCount',
+                   'repostsCount', 'likesCount', 'er', 'viewsCount',
+                   'toneMark', 'country', 'region']]
+
+    # Получение полной таблицы
+    df_join = pd.DataFrame(results).join(data, how='inner', lsuffix='_df1', rsuffix='_df2')
+    df_join.columns = ['Кластер', 'Тематика текста'] + ['Время', 'Источник', 'Ссылка на автора', 'Автор', 'Ссылка на текст', 'Тип автора', 'Пол', 'Возраст',
+                       'Тип источника', 'Комментариев', 'Аудитория', 'Репостов', 'Лайков', 'Вовлеченность', 'Просмотров',
+                       'Тональность', 'Страна', 'Регион']
+
+    return {
+        "cluster_data": df_join.where(pd.notnull(df_join), None).to_dict(orient='records'),  # Замена NaN на None
+    }
+    # return {"clusters": serializable_clusters}
+
+
+# from run_llm_embed_query import process_embeddings
+
+# from pydantic import BaseModel
+# import re
+
+# # Модель для запроса обработки LLM
+# class LLMQueryRequest(BaseModel):
+#     prompt_question: str
+#     user_id: str  # Добавляем user_id
+#     folder_name: str  # Добавляем folder_name
+#     file_name: str  # Добавляем folder_name
+#     index: int  # Добавляем index
+
+#     def __init__(self, **data):
+#         super().__init__(**data)
+#         self.prompt_question = self.clean_string(self.prompt_question)
+
+#     @staticmethod
+#     def clean_string(value: str) -> str:
+#         if value is not None:
+#             value = re.sub(r'[\u0001-\u001F\u007F-\u009F]', '', value)
+#             value = value.replace("'", "")
+#         return value
+    
+
+# @app.post("/run_llm_second_query", tags=["ai analytics"])
+# async def run_llm_second_query_endpoint(
+#     llm_query_request: LLMQueryRequest,
+#     background_tasks: BackgroundTasks
+# ):
+#     try:
+#         # Генерируем уникальный идентификатор для задачи
+#         task_id = str(uuid.uuid4())
+
+#         # Извлекаем данные из входного запроса
+#         index = llm_query_request.index
+#         user_id = llm_query_request.user_id
+#         folder_name = llm_query_request.folder_name
+#         file_name = llm_query_request.file_name
+#         prompt_question = llm_query_request.prompt_question
+
+#         # Подготовка task_data для передачи в process_embeddings
+#         task_data = {
+#             'index': index,
+#             'task_id': task_id,
+#             'user_id': user_id,
+#             'folder_name': folder_name,
+#             'file_name': file_name
+#         }
+
+#         # Запуск обработки эмбеддингов в фоновом режиме
+#         background_tasks.add_task(process_embeddings, task_data)
+
+#         return JSONResponse(content={"task_id": task_id, "message": "Processing embeddings started."})
+    
+#     except Exception as e:
+#         logging.error(f"Error in run_llm_second_query: {e}")
+#         raise HTTPException(status_code=500, detail="Error processing request")
+    
 
 
 if __name__ == "__main__":

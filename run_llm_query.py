@@ -17,26 +17,59 @@ from sklearn.metrics import silhouette_score
 from umap import UMAP
 from hdbscan import HDBSCAN
 from bertopic import BERTopic
+import pandas as pd
 
 from torch import bfloat16
 from bertopic.representation import KeyBERTInspired, MaximalMarginalRelevance, TextGeneration
 from search_data_elastic import elastic_query
+from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.ext.asyncio import create_async_engine
+from sqlalchemy.orm import sessionmaker
+from config import DB_HOST, DB_NAME, DB_PASS, DB_PORT, DB_USER
 
 import numpy as np
 import redis.asyncio as redis
-from nltk.corpus import stopwords
-from nltk.tokenize import word_tokenize
-import nltk
-
 # Инициализация клиента Redis
 redis_db = redis.Redis(host='localhost', port=6379, db=0)
 
-# Загружаем списки стоп-слов и токенайзер
-nltk.download('stopwords')
-nltk.download('punkt')
+# from nltk.corpus import stopwords
+# from nltk.tokenize import word_tokenize
+# import nltk
 
-# Получаем список стоп-слов для русского языка
-russian_stopwords = stopwords.words("russian")
+# # Загружаем списки стоп-слов и токенайзер
+# nltk.download('stopwords')
+# nltk.download('punkt')
+
+# # Получаем список стоп-слов для русского языка
+# russian_stopwords = stopwords.words("russian")
+
+DATABASE_URL = f"postgresql+asyncpg://{DB_USER}:{DB_PASS}@{DB_HOST}:{DB_PORT}/{DB_NAME}"
+engine = create_async_engine(DATABASE_URL)
+async_session_maker = sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
+
+from sqlalchemy import text
+
+async def save_embeddings(user_id, filename, folder_name, embeddings, session: AsyncSession):
+    # Проверка типа user_id
+    if not isinstance(user_id, int):
+        user_id = int(user_id)  # Преобразование в int
+    # Проходим по всем эмбеддингам и сохраняем их в БД
+    for embedding in embeddings:
+        # Сериализация эмбеддинга в двоичный формат
+        embedding_serialized = pickle.dumps(embedding)
+        print(f"Serialized embedding: {embedding_serialized}")
+
+        query = text("""
+        INSERT INTO embeddings (user_id, filename, folder_name, embedding)
+        VALUES (:user_id, :filename, :folder_name, :embedding_serialized)
+        """)  # Используем text для SQL-запроса
+        await session.execute(query, {
+            'user_id': user_id,
+            'filename': filename,
+            'folder_name': folder_name,  # Передаем имя папки
+            'embedding_serialized': embedding_serialized
+        })
+    await session.commit()  # Фиксируем изменения в БД
 
 # Установка статуса GPU
 async def set_gpu_status(status: str):
@@ -102,19 +135,19 @@ async def run_llm_query(task_data: dict):
 
         # Получаем тексты и ограничиваем их количество
         texts = [x['text'] for x in data]
-        texts = texts[:5000]  # Ограничение
+        texts = texts[:300]  # Ограничение
         total_texts = len(texts)
 
-        # Функция очистки текста
-        def preprocess_text(text):
-            text = text.lower()
-            text = re.sub(r"http\S+|www\S+|https\S+", '', text, flags=re.MULTILINE)
-            text = re.sub(r'\d+', '', text)
-            text = re.sub(r'[^\w\s]', '', text)
-            text = ' '.join([word for word in text.split() if word not in russian_stopwords])
-            return text
+        # # Функция очистки текста
+        # def preprocess_text(text):
+        #     text = text.lower()
+        #     text = re.sub(r"http\S+|www\S+|https\S+", '', text, flags=re.MULTILINE)
+        #     text = re.sub(r'\d+', '', text)
+        #     text = re.sub(r'[^\w\s]', '', text)
+        #     text = ' '.join([word for word in text.split() if word not in russian_stopwords])
+        #     return text
 
-        texts = [preprocess_text(x) for x in texts]
+        # texts = [preprocess_text(x) for x in texts]
         print('Всего текстов: {}'.format(total_texts))
         et = time.time()
 
@@ -144,9 +177,10 @@ async def run_llm_query(task_data: dict):
         semaphore = asyncio.Semaphore(10)  # Ограничение на количество одновременных запросов
 
         async def process_unique_text(index, text):
-            if len(text) > 25000:
+            if len(text) < 8:
+                label = "Короткий текст"
+            elif len(text) > 25000:
                 label = "Длинный текст"
-                print("Длинный текст")
             else:
                 payload = {
                     "model": "Vikhr_Q3",
@@ -186,19 +220,25 @@ async def run_llm_query(task_data: dict):
             tasks = []
             for i, text in enumerate(unique_texts):
                 task = asyncio.create_task(generate_with_semaphore(i, text))
-                tasks.append(task)
+                tasks.append(task) 
             await asyncio.gather(*tasks)
 
-        async def generate_with_semaphore(index, text):
+        async def generate_with_semaphore(index, text): 
             async with semaphore:
-                await process_unique_text(index, text)
-
+                await process_unique_text(index, text) 
+ 
         await main()
 
-        # # Закрываем клиент после завершения всех запросов
+        file_location = f'/home/dev/fastapi/analytics_app/data/{task_data["user_id"]}/bertopic_files_directory/{task_data["folder_name"]}/'
+        os.makedirs(os.path.dirname(file_location), exist_ok=True)
+        os.chdir(file_location)
+        with open(f'my_list_llm_ans_{indexes[int(task_data["index"])]}_{current_time}.pkl', 'wb') as file:
+            pickle.dump(llm_labels, file)
+
+        # # Закрываем клиент после завершения всех запросов 
         # await client.aclose()
 
-        print(llm_labels[:5])
+        print(texts[:10])
         elapsed_time = time.time() - et
         print('Execution LLM time:', elapsed_time, 'seconds')
 
@@ -211,11 +251,14 @@ async def run_llm_query(task_data: dict):
 
         print('Текстов в llm_labels: {}'.format(len(llm_labels))) 
 
-        print(llm_labels[:5])
+        pd.DataFrame(zip(texts, llm_labels)).to_excel('/home/dev/fastapi/analytics_app/files/Llm_labels_texts.xlsx', 
+                                                      index=False)
+
+        print(llm_labels[:10])
         elapsed_time = time.time() - et 
         total_seconds = int(elapsed_time)
         hours = total_seconds // 3600
-        minutes = (total_seconds % 3600) // 60
+        minutes = (total_seconds % 3600) // 60 
         seconds = total_seconds % 60
         execution_llm_time = f"{hours} ч. {minutes} мин. {seconds} сек."
         print('Execution LLM time:', execution_llm_time)
@@ -277,7 +320,7 @@ async def run_llm_query(task_data: dict):
                 "model": "llama3",
                 "prompt": (
                     f"Используя ключевые слова: {key_words}, сгенерируй на русском языке короткий "
-                    "(до 10 слов) и понятный заголовок для данной темы, пиши только сам заголовок на русском языке."
+                    "(1 предложение) и понятный заголовок для данной темы, пиши только сам заголовок на русском языке."
                 ),
                 "stream": False
             }
@@ -315,9 +358,16 @@ async def run_llm_query(task_data: dict):
 
         file_location = f'/home/dev/fastapi/analytics_app/data/{task_data["user_id"]}/bertopic_files_directory/{task_data["folder_name"]}/'
         os.makedirs(os.path.dirname(file_location), exist_ok=True)
-
+        os.chdir(file_location)
         new_filename = f"{indexes[int(task_data['index'])]}_{current_time}.html"
         fig.write_html(file_location + new_filename)
+
+        print(f'Сохранение эмбеддингов: {len(embeddings_umap)}')
+        # Сохранение эмбеддингов
+        async with AsyncSession(engine) as session:
+            await save_embeddings(user_id=task_data["user_id"], filename=new_filename, folder_name=task_data['folder_name'], 
+                                  embeddings=embeddings, session=session)
+        print(555777)
 
         filename = 'topic_model_' + new_filename.split('.html')[0]
 
@@ -342,9 +392,6 @@ async def run_llm_query(task_data: dict):
         except Exception as e:
             print(f"Ошибка при сохранении модели: {e}")
 
-        os.chdir(file_location)
-        with open(f'my_list_llm_ans_{indexes[int(task_data["index"])]}_{current_time}.pkl', 'wb') as file:
-            pickle.dump(llm_labels, file)
 
         user_data = await redis_db.execute_command('HGETALL', task_data['user_id'])
         user_data = {key.decode('utf-8'): value.decode('utf-8') for key, value in user_data.items()}
