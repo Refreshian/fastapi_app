@@ -25,6 +25,7 @@ from search_data_elastic import elastic_query
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.ext.asyncio import create_async_engine
 from sqlalchemy.orm import sessionmaker
+from collections import defaultdict
 from config import DB_HOST, DB_NAME, DB_PASS, DB_PORT, DB_USER
 
 import numpy as np
@@ -57,7 +58,7 @@ async def save_embeddings(user_id, filename, folder_name, embeddings, session: A
     for embedding in embeddings:
         # Сериализация эмбеддинга в двоичный формат
         embedding_serialized = pickle.dumps(embedding)
-        print(f"Serialized embedding: {embedding_serialized}")
+        # print(f"Serialized embedding: {embedding_serialized}")
 
         query = text("""
         INSERT INTO embeddings (user_id, filename, folder_name, embedding)
@@ -135,48 +136,26 @@ async def run_llm_query(task_data: dict):
 
         # Получаем тексты и ограничиваем их количество
         texts = [x['text'] for x in data]
-        texts = texts[:300]  # Ограничение
+        texts = texts[:100000]  # Ограничение
         total_texts = len(texts)
-
-        # # Функция очистки текста
-        # def preprocess_text(text):
-        #     text = text.lower()
-        #     text = re.sub(r"http\S+|www\S+|https\S+", '', text, flags=re.MULTILINE)
-        #     text = re.sub(r'\d+', '', text)
-        #     text = re.sub(r'[^\w\s]', '', text)
-        #     text = ' '.join([word for word in text.split() if word not in russian_stopwords])
-        #     return text
-
-        # texts = [preprocess_text(x) for x in texts]
-        print('Всего текстов: {}'.format(total_texts))
-        et = time.time()
-
-        # Обновляем начальный статус задачи в Redis
-        await redis_db.hset(f"task:{task_data['task_id']}", mapping={
-            "status": "in_progress",
-            "total_texts": total_texts,
-            "completed_texts": 0,
-            "progress": 0,
-        })
+        print(f'Текстов дял анализа: {total_texts}')
 
         # Шаг 1: Дедупликация текстов
-        unique_texts_dict: Dict[str, List[int]] = OrderedDict()
+        unique_texts_dict: Dict[str, List[int]] = defaultdict(list)
         for idx, text in enumerate(texts):
-            if text not in unique_texts_dict:
-                unique_texts_dict[text] = [idx]
-            else:
-                unique_texts_dict[text].append(idx)
+            unique_texts_dict[text].append(idx)
 
         unique_texts = list(unique_texts_dict.keys())
         unique_total = len(unique_texts)
 
-        llm_labels = [None] * total_texts  # Инициализируем список меток
+        llm_labels = [None] * len(texts)  # Инициализируем список меток
 
         client = AsyncClient(host='http://localhost:11434')  # Создаем клиент один раз
+        semaphore = asyncio.Semaphore(10)  # Возможное увеличение семафора
 
-        semaphore = asyncio.Semaphore(10)  # Ограничение на количество одновременных запросов
+        et = time.time() 
 
-        async def process_unique_text(index, text):
+        async def process_unique_text(text):
             if len(text) < 8:
                 label = "Короткий текст"
             elif len(text) > 25000:
@@ -188,9 +167,7 @@ async def run_llm_query(task_data: dict):
                         {
                             "role": "user",
                             "content": (
-                                f"У меня есть следующий текст:\n"
-                                f"{text}\n\n"
-                                f"{task_data['promt_question']}"
+                                f"У меня есть следующий текст:\n{text}\n\n{task_data['promt_question']}"
                             )
                         }
                     ]
@@ -198,36 +175,38 @@ async def run_llm_query(task_data: dict):
 
                 with torch.no_grad():
                     response = await client.chat(model='Vikhr_Q3', messages=payload['messages'])
-                    if response:
-                        label = response['message']['content']
-                    else:
-                        label = "bad response"
-                        print("bad response")
+                    label = response['message']['content'] if response else "bad response"
 
-            # Назначаем метку всем индексам, где встречается этот текст
-            for idx in unique_texts_dict[text]:
-                llm_labels[idx] = label
+            count = len(unique_texts_dict[text])  # Получаем количество обработанных текстов для данного уникального текста
+            return count, label  # Возвращаем количество обработанных текстов и метку
 
-            # Обновляем статус задачи в Redis
-            completed = sum(1 for label in llm_labels if label is not None)
-            progress = round((completed / total_texts) * 100, 1)
-            await redis_db.hset(f"task:{task_data['task_id']}", mapping={
-                "completed_texts": completed,
-                "progress": progress
-            })
+        async def generate_with_semaphore(text):
+            async with semaphore:
+                return await process_unique_text(text)
 
         async def main():
-            tasks = []
-            for i, text in enumerate(unique_texts):
-                task = asyncio.create_task(generate_with_semaphore(i, text))
-                tasks.append(task) 
-            await asyncio.gather(*tasks)
+            completed = 0
+            labels = []
+            tasks = [generate_with_semaphore(text) for text in unique_texts]
 
-        async def generate_with_semaphore(index, text): 
-            async with semaphore:
-                await process_unique_text(index, text) 
- 
+            for future in asyncio.as_completed(tasks):
+                count, label = await future
+                completed += count
+                labels.append(label)
+
+                progress = round((completed / total_texts) * 100, 1)
+                await redis_db.hset(f"task:{task_data['task_id']}", mapping={
+                    "status": "in progress",
+                    "completed_texts": completed,
+                    "progress": progress
+                })
+
+            for i, label in enumerate(labels):
+                for idx in unique_texts_dict[unique_texts[i]]:
+                    llm_labels[idx] = label
+
         await main()
+        print('LLM Complete')
 
         file_location = f'/home/dev/fastapi/analytics_app/data/{task_data["user_id"]}/bertopic_files_directory/{task_data["folder_name"]}/'
         os.makedirs(os.path.dirname(file_location), exist_ok=True)
@@ -238,7 +217,7 @@ async def run_llm_query(task_data: dict):
         # # Закрываем клиент после завершения всех запросов 
         # await client.aclose()
 
-        print(texts[:10])
+        # print(texts[:10])
         elapsed_time = time.time() - et
         print('Execution LLM time:', elapsed_time, 'seconds')
 
@@ -270,7 +249,7 @@ async def run_llm_query(task_data: dict):
         torch.cuda.empty_cache()
 
         # Обработка эмбеддингов
-        embedding_model = SentenceTransformer("DeepPavlov/rubert-base-cased-sentence")
+        embedding_model = SentenceTransformer("/home/dev/fastapi/analytics_app/data/embed_files/DeepPavlov/rubert-base-cased-sentence")
         embeddings = []
         num_embeddings = len(llm_labels)
 
@@ -364,9 +343,9 @@ async def run_llm_query(task_data: dict):
 
         print(f'Сохранение эмбеддингов: {len(embeddings_umap)}')
         # Сохранение эмбеддингов
-        async with AsyncSession(engine) as session:
-            await save_embeddings(user_id=task_data["user_id"], filename=new_filename, folder_name=task_data['folder_name'], 
-                                  embeddings=embeddings, session=session)
+        # async with AsyncSession(engine) as session:
+        #     await save_embeddings(user_id=task_data["user_id"], filename=new_filename, folder_name=task_data['folder_name'], 
+        #                           embeddings=embeddings, session=session)
         print(555777)
 
         filename = 'topic_model_' + new_filename.split('.html')[0]

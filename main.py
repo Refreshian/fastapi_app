@@ -2445,7 +2445,7 @@ async def llm_analyze(user_id: int, folder_name: str, file_name: str):
         "aggregated_data": result.where(pd.notnull(result), None).to_dict(orient='records')  # Замена NaN на None
     }
 
-
+from sqlalchemy.ext.asyncio import AsyncSession
 # Функция для получения сессии базы данных
 async def get_db() -> AsyncGenerator[AsyncSession, None]:
     async with async_session_maker() as session:
@@ -2456,29 +2456,40 @@ from sqlalchemy.future import select
 
 # JWT token scheme
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="login")
-
+ 
 # Dependency to get the current user based on the provided token
-async def get_current_user(token: str = Depends(oauth2_scheme), db: Session = Depends(get_db)):
+async def get_current_user(token: str = Depends(oauth2_scheme), db: AsyncSession = Depends(get_db)):
     credentials_exception = HTTPException(
         status_code=status.HTTP_401_UNAUTHORIZED,
         detail="Invalid authentication credentials",
         headers={"WWW-Authenticate": "Bearer"},
     )
     payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
-    print(payload)
+    print(555) 
+    # print(payload)
 
-    user_id: str = payload.get("sub") 
-    return user_id
+    user_id: str = payload.get("sub")
+    print(user_id)
+    
+    # Получаем объект User из базы данных по user_id
+    query = select(User).where(User.id == int(user_id))
+    result = await db.execute(query)
+    user = result.scalar_one_or_none()
+    
+    if user is None:
+        raise credentials_exception
+    return user_id 
  
 
-class ResponceModel(BaseModel):
-    id:int
-    class Config():
-        orm_mode =True
-    
+class ResponseModel(BaseModel):
+    id: int
+
+    class Config:
+        orm_mode = True
+
 # Route to retrieve the current user profile details
 @app.get('/user-id', tags=['user'])
-def get_user_profile(current_user: User = Depends(get_current_user)):
+async def get_user_profile(current_user: int = Depends(get_current_user)):
     return current_user
 
 def get_user_profile(current_user: User = Depends(get_current_user)):
@@ -2539,7 +2550,7 @@ async def add_folder(user_id: str, folder_name: str):
     os.makedirs(storage_path)
 
     # Получаем текущее состояние папок в Redis
-    user_data = redis_db.hget(user_id, "json_files_directory")
+    user_data = await redis_db.hget(user_id, "json_files_directory")
     if user_data is None:
         user_folders = {}
     else:
@@ -2550,7 +2561,7 @@ async def add_folder(user_id: str, folder_name: str):
         user_folders[folder_name] = []
 
     # Сохраняем обновлённую структуру в Redis
-    redis_db.hset(user_id, "json_files_directory", json.dumps(user_folders))
+    await redis_db.hset(user_id, "json_files_directory", json.dumps(user_folders))
 
     return f"Папка {folder_name} у пользователя {user_id} создана!"
 
