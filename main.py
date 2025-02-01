@@ -601,6 +601,7 @@ def process_authors_data(authors_hub):
     for author_group in authors_hub:
         name_unique_author = [author[0].get('fullname', author[0].get('hub', '')) for author in author_group]
         dct_non_unique_author = dict(Counter(name_unique_author))
+        
         list_non_unique_authors = list(set([key for key, val in dct_non_unique_author.items() if val > 1]))
         list_unique_authors = list(set([key for key, val in dct_non_unique_author.items() if val == 1]))
 
@@ -627,200 +628,146 @@ def process_authors_data(authors_hub):
                     author_obj['count_texts'] = len(texts)
                     author_obj['texts'] = texts
 
-                    if not author_obj.get('url'):
-                        # Здесь исправлено обращение к атрибуту объекта Text
-                        author_obj['url'] = texts[0].url if texts else ''
+                    # Заполняем отсутствующие поля
+                    author_obj['url'] = texts[0].url if texts else ''
+                    author_obj['fullname'] = author_obj.get('fullname', '')
+                    author_obj['sex'] = author_obj.get('sex', '')
+                    author_obj['age'] = author_obj.get('age', '')
 
                     author_data.append(author_obj)
+
             authors_list.append({'author_data': author_data})
 
     return authors_list
 
 
 @app.get('/information_graph', tags=['data analytics'])
-async def information_graph(index: int=None, 
-                             min_date: int=None, max_date: int=None, query_str: Optional[str] = 'карта', 
+async def information_graph(index: int = None, 
+                             min_date: int = None, max_date: int = None, 
+                             query_str: Optional[str] = 'карта', 
                              post: Optional[bool] = None, repost: Optional[bool] = None, 
                              SMI: Optional[bool] = None) -> ModelInfGraph:
-    # Путь к файлу с темами 
     file_path = '/home/dev/fastapi/analytics_app/data/indexes.pkl'
-    # Загрузка словаря с темами
     indexes = load_dict_from_pickle(file_path)
 
-    # делаем запрос на текстовый поиск
-    data = elastic_query(theme_index=indexes[index], query_str=query_str)
-    # data = es.search(index='skillfactory_zaprosy_na_obuchenie_15.01.2024-21.01.2024', query_str='data')
+    data = elastic_query(theme_index=indexes[index], min_date=min_date, 
+                         max_date=max_date, query_str=query_str)
 
-    # отфильтровываем по необходимой дате из календаря
-    data = [x for x in data if min_date <= x['timeCreate'] <= max_date]
     num_messages = len(data)
-    
-    if post == None:
-        post = False
-    if repost == None:
-        repost = False
-    if SMI == None:
-        SMI = False
 
-    # предобработка данных
+    post = post if post is not None else False
+    repost = repost if repost is not None else False
+    SMI = SMI if SMI is not None else False
+
     df_meta = pd.DataFrame(data)
-    # del data
 
     count_vectorizer = CountVectorizer()
-    vector_matrix = count_vectorizer.fit_transform(
-        df_meta['text'].values)
-
+    vector_matrix = count_vectorizer.fit_transform(df_meta['text'].values)
     cosine_similarity_matrix = cosine_similarity(vector_matrix)
-
     dff = pd.DataFrame(cosine_similarity_matrix)
+    np.fill_diagonal(dff.values, 0)  # Убираем диагональ
 
-    val_dff = dff.values
-    # заменяем значения по главной диагонали на 0
-    for i in range(len(val_dff)):
-        val_dff[i][i] = 0
-        
-    dff = pd.DataFrame(val_dff)
-
-    df_meta = df_meta.join(pd.DataFrame(list(df_meta['authorObject'].values), columns=['fullname', 'text_url', 'author_type', 'sex', 'age']))
-    # заменяем пустые fullname в СМИ на значения из hub
+    df_meta = df_meta.join(pd.DataFrame(list(df_meta['authorObject'].values),
+                    columns=['fullname', 'text_url', 'author_type', 'sex', 'age']))
     df_meta['fullname'].fillna(df_meta['hub'], inplace=True)
-    df = df_meta.copy()
 
-    # создаем словарь похожих текстов вида {12: [11, 13],  44: [190], ...}
     fin_dict = {}
-    threashhold = 0.8
+    threshold = 0.8
 
-    # выявляем список строк с похожими текстам
     for i in range(dff.shape[0]):
-        if list(np.where(dff.loc[i].values >= threashhold)[0]) != []:
-            if i not in [item for sublist in list(fin_dict.values()) for item in sublist]:
-                fin_dict[i] = list(
-                    np.where(dff.loc[i].values >= threashhold)[0])
-                
+        similar_indices = list(np.where(dff.loc[i].values >= threshold)[0])
+        if similar_indices:
+            if i not in [item for sublist in fin_dict.values() for item in sublist]:
+                fin_dict[i] = similar_indices
         else:
             fin_dict[i] = []
-            
-            
+
     df_meta.fillna('', inplace=True)
-    # оставляем необходимую мету
     df_meta = df_meta[['fullname', 'url', 'author_type', 'hub', 'sex', 'age', 'audienceCount', 'er', 'viewsCount', 'timeCreate']]
 
-
-    # получение итогового массива данных с последовательностями авторов распространения информации и репостами (похожими текстами)
     data = []
-
     for key, val in fin_dict.items():
         author_dct = {}
-        # забираем отдельно автора и метаданные по нему
         author_dct['author'] = df_meta.loc[key].to_dict()
-        # присоединяем репосты к автору, если похожие тексты были далее 
+        author_dct['author']['timeCreate'] = str(df_meta.loc[key]['timeCreate'])
         author_dct['reposts'] = []
-        
-        if len(val) > 0:
-            for i in range(len(val)):
-                author_dct['reposts'].append(df_meta[df_meta.index.isin([val[i]])].T.to_dict()[val[i]]) # добавляем словарь с автором репоста и его метаданными
-        else:
-            pass
-        
+        for i in val:
+            repost_data = df_meta.loc[i].to_dict()
+            repost_data['timeCreate'] = str(repost_data['timeCreate'])
+
+            # Изменяем viewsCount на строку
+            repost_data['viewsCount'] = str(repost_data['viewsCount'])
+
+            author_dct['reposts'].append(repost_data)
         data.append(author_dct)
 
-    ### данные для динамического графика
-    def to_datetime(unixtime):
-        return datetime.fromtimestamp(unixtime)
-    
-    df['timeCreate'] = df['timeCreate'].apply(to_datetime)
-    df.sort_values(by='timeCreate', inplace=True)
-    df.reset_index(inplace=True)
-    df.drop('index', axis=1, inplace=True)
+    # Преобразование временной метки
+    df_meta['timeCreate'] = pd.to_datetime(df_meta['timeCreate'], errors='coerce')
+    df_meta.sort_values(by='timeCreate', inplace=True)
+    df_meta.reset_index(drop=True, inplace=True)
 
-    bins = pd.date_range(np.min(df['timeCreate'].values), np.max(df['timeCreate'].values), freq='600T') # по 10 минут
+    bins = pd.date_range(start=df_meta['timeCreate'].min(), end=df_meta['timeCreate'].max(), freq='600T')
+    df_meta['cut'] = pd.cut(df_meta['timeCreate'], bins=bins, right=False)
+    df_meta['cut'] = df_meta['cut'].astype(str).replace('nan', str(bins[-1]))
+    df_meta['cut'] = df_meta['cut'].apply(lambda x: x.split(',')[0].replace('[', ''))
 
-    df['cut'] = pd.cut(df['timeCreate'], bins, right=False)
-    df = df.astype(str)
-    df['cut'] = [x.replace('nan', str(bins[-1])) if x == 'nan' else x for x in df['cut'].values]
-    df['cut'] = [x.split(',')[0].replace("[", '') for x in df['cut'].values]
-    # df.loc[0, 'timeCreate'] = df.loc[0, 'timeCreate'] + timedelta(minutes=9)
-    # df.loc[df.shape[0]-1, 'timeCreate'] = df.loc[df.shape[0]-1, 'timeCreate'] - timedelta(minutes=9)
-
-    # мержинг данных на 10 минутки
     df_bins = pd.DataFrame(bins, columns=['cut']).astype(str).set_index('cut')
-    df_bins['cut'] = list(df_bins.index)
-
-    df = df_bins.set_index('cut').join(df.set_index('cut'))
-    df.fillna('', inplace=True)
-
-    df['timeCreate'] = list(df.index)
-    df.reset_index(inplace=True)
-    df.reset_index(inplace=True)
-    df.drop(['index', 'cut'], axis=1, inplace=True)
+    df = df_bins.join(df_meta.set_index('cut')).fillna('')
+    df['timeCreate'] = df.index
+    df.reset_index(drop=True, inplace=True)
     df = df[['hub', 'timeCreate', 'audienceCount']]
+    df['audienceCount'] = df['audienceCount'].replace('', 0).astype(int)
 
-    df['audienceCount'] = [int(x) if x != '' else x for x in df['audienceCount'].values]
-    listhubs = [x for x in list(set(df['hub'].values)) if x != '']
-    set_timeCreate = set(df['timeCreate'].values)
+    unique_hubs = df['hub'].unique()
 
-    # добавляем не заполненные N-минутки по источнику данными по времени и 0 по аудитории (т.е. в этот период 10 мин не было сообщ)
-    for i in range(len(listhubs)):
-        
-        df_ban = df[df['hub'] == listhubs[i]]
-        # недостающие временные отрезки
-        delta_set = set_timeCreate - set(df_ban['timeCreate'].values)
-            
-        if delta_set != set():
-            df_need = pd.DataFrame(zip([listhubs[i]]*len(delta_set), delta_set, [0]*len(delta_set)))
-            df_need.columns = ['hub', 'timeCreate', 'audienceCount']
-            df = pd.concat([df, df_need], ignore_index=True)
-        
-        else:
-            df_need = pd.DataFrame(zip([listhubs[i]]*len(set_timeCreate), set_timeCreate, [0]*len(set_timeCreate)))
-            df_need.columns = ['hub', 'timeCreate', 'audienceCount']
-            df = pd.concat([df, df_need], ignore_index=True)
-        
+    for hub in unique_hubs:
+        hub_data = df[df['hub'] == hub]
+        missing_times = pd.Index(bins).difference(hub_data['timeCreate'])
+        for missing_time in missing_times:
+            df = pd.concat([df, pd.DataFrame({'hub': [hub], 'timeCreate': [missing_time], 'audienceCount': [0]})], ignore_index=True)
+
+    # Убедимся, что timeCreate действительно в формате Timestamp
+    df['timeCreate'] = pd.to_datetime(df['timeCreate'], errors='coerce')
+
+    # Сортировка значений
     df.sort_values(by='timeCreate', inplace=True)
 
-    # подготовка итогового словаря с hub и аудиторией
-    hub_dcts = [df[df['hub'] == x][['timeCreate', 'audienceCount']].set_index('timeCreate').to_dict() for x in listhubs]
+    # Преобразование данных по хабу
+    hub_data_dicts = {hub: hub_df.set_index('timeCreate')['audienceCount'].to_dict() for hub, hub_df in df.groupby('hub')}
+    
+    dynamicdata_audience = {}
+    for hub, audience_data in hub_data_dicts.items():
+        dynamicdata_audience[hub] = {str(int(dt.timestamp())): str(aud) for dt, aud in audience_data.items()}
 
-    for i in range(len(hub_dcts)):
-        hub_dcts[i][listhubs[i]] = hub_dcts[i].pop('audienceCount')
+    # Компактизируем все данные по времени
+    dynamicdata_audience = {key: ChainMap(*[{k: v} for k, v in audience_data.items()]) for key, audience_data in dynamicdata_audience.items()}
 
-    dynamicdata_audience = []
-    for i in range(len(hub_dcts)):
-        dynamicdata_audience.append({list(hub_dcts[i].keys())[0]:{str(int(time.mktime(datetime.strptime(key, "%Y-%m-%d %H:%M:%S").timetuple()))): str(val) for key, val in hub_dcts[i][list(hub_dcts[i].keys())[0]].items()}})
+    for key, values in dynamicdata_audience.items():
+        total_audience = sum(int(val) for val in values.values())
+        dynamicdata_audience[key] = {int(k): str(total_audience) for k in values.keys()}
 
-    # мин и макс даты в выбранном интервале времени (10 мни, 20 мин..)
-    mind, maxd = list(dynamicdata_audience[0][list(dynamicdata_audience[0].keys())[0]].keys())[0], list(dynamicdata_audience[0][list(dynamicdata_audience[0].keys())[0]].keys())[-1]
-    mind, maxd
-
-    dynamicdata_audience = dict(ChainMap(*dynamicdata_audience))
-
-    def sum_data(lst): # последовательно накапливает/суммирует кол-во по аудитории по столбцу..[1, 2, 4, 0, 2] -> [1, 3, 7, 7, 9..] 
-        for i in range(len(lst)-1):
-            lst[i+1] = lst[i] + lst[i+1]
-        return lst
-
-    for key in dynamicdata_audience.keys():
-        dynamicdata_audience[key] = dict(zip([int(x[0]) for x in dynamicdata_audience[key].items()], [str(x) for x in sum_data([int(x[1]) for x in dynamicdata_audience[key].items()])]))
-
-    # Подсчет количества сообщений
     print(f"Количество сообщений: {num_messages}")
 
     def count_unique_authors(data):
         authors = set()
         for item in data:
             authors.add(item['author']['fullname'])
-            if 'reposts' in item and item['reposts']:
-                for repost in item['reposts']:
-                    authors.add(repost['fullname'])
+            for repost in item.get('reposts', []):
+                authors.add(repost['fullname'])
         return len(authors)
 
     num_unique_authors = count_unique_authors(data)
-
     print(f"Количество уникальных авторов: {num_unique_authors}")
 
-    values = ModelInfGraph(values=data, post=post, repost=repost, SMI=SMI, dynamicdata_audience=dynamicdata_audience, 
-                           num_messages=num_messages, num_unique_authors=num_unique_authors)
-    return  values
+    return ModelInfGraph(
+        values=data,
+        post=post,
+        repost=repost,
+        SMI=SMI,
+        dynamicdata_audience=dynamicdata_audience,
+        num_messages=num_messages,
+        num_unique_authors=num_unique_authors
+    )
 
 
 @app.get("/themes")
@@ -2425,11 +2372,18 @@ async def llm_analyze(user_id: int, folder_name: str, file_name: str):
     # Находим файл, в имени которых содержится выбранный html
     file = [file for file in files if file_name.replace('.html', '') in file]
     file = file[0].replace('topic_model_', 'my_list_llm_ans_')
-    print(file)
 
-    with open(texts_path + '/' + file, 'rb') as f:
+    thematics_path = texts_path + '/' + 'my_list_llm_ans_' + file.replace('.html', '.pkl')
+
+    with open(thematics_path, 'rb') as f:
         texts_thematics = pickle.load(f)
     df_join.insert(1, 'Тематика текста', texts_thematics)
+
+    # Полный путь к выходному файлу
+    output_path = os.path.join('/home/dev/fastapi/analytics_app/files/', 'df_join.xlsx')
+
+    # Сохранение DataFrame в Excel
+    df_join.to_excel(output_path, index=False)  # index=False, если не нужно сохранять индексы
 
     # Сохранение полных данных и агрегированных данных в Redis
     await redis_db.hset(str(user_id), "full_data", json.dumps(df_join.where(pd.notnull(df_join), None).to_dict(orient='records')))
@@ -2661,7 +2615,7 @@ async def delete_folder(user_id: str, directory_type: str, folder_name: str):
     es_indexes = [index for index in es.indices.get('*')]
     
     # Удаляем данные из Elasticsearch
-    if files_in_directory:
+    if files_in_directory and directory_type == 'json_files_directory':
         for file in files_in_directory:
             # Индекс, который нужно удалить
             index_to_delete = file.replace('.json', '')
@@ -2679,13 +2633,19 @@ async def delete_folder(user_id: str, directory_type: str, folder_name: str):
     try:
         # Проверяем, существует ли папка
         if os.path.exists(folder_path):
-            # Удаляем папку и всё её содержимое
-            shutil.rmtree(folder_path)
+            # Рекурсивно удаляем папку и все ее содержимое
+            for root, dirs, files in os.walk(folder_path, topdown=False):
+                for file in files:
+                    file_path = os.path.join(root, file)
+                    os.remove(file_path)
+                for dir in dirs:
+                    dir_path = os.path.join(root, dir) 
+                    os.rmdir(dir_path)
+            os.rmdir(folder_path)
 
-            return {"message": f"Папка '{folder_name}' пользователя '{user_id}' успешно удалена."}
+            return {"message": f"Папка '{folder_name}' пользователя '{user_id}' и все ее содержимое успешно удалены."}
         else:
             raise HTTPException(status_code=404, detail="Папка не найдена.")
-
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 

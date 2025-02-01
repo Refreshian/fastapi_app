@@ -136,7 +136,7 @@ async def run_llm_query(task_data: dict):
 
         # Получаем тексты и ограничиваем их количество
         texts = [x['text'] for x in data]
-        texts = texts[:100000]  # Ограничение
+        texts = texts[:100]  # Ограничение
         total_texts = len(texts)
         print(f'Текстов дял анализа: {total_texts}')
 
