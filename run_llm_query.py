@@ -94,7 +94,7 @@ def load_dict_from_pickle(file_name):
 async def generate_answers(client, prompt):
     url = "http://localhost:11434/api/generate"
     payload = {
-        "model": "Vikhr_Q3",
+        "model": "erwan2/DeepSeek-R1-Distill-Qwen-14B", # Vikhr_Q3
         "prompt": prompt,
         "stream": False
     }
@@ -112,10 +112,9 @@ from collections import OrderedDict
 from typing import List, Dict
 
 async def run_llm_query(task_data: dict):
-    """Обрабатывает LLM-запрос с обновлением статуса задачи в Redis."""
+    """Обрабатывает LLM-запрос с обновлением статуса задачи в Redis, с периодическим сохранением результатов."""
+    current_time = datetime.now().strftime('%Y%m%d_%H%M%S')
     try:
-        current_time = datetime.now().strftime('%Y%m%d_%H%M%S')
-
         # Загружаем данные индекса
         file_path = '/home/dev/fastapi/analytics_app/data/indexes.pkl'
         indexes = load_dict_from_pickle(file_path)
@@ -136,9 +135,13 @@ async def run_llm_query(task_data: dict):
 
         # Получаем тексты и ограничиваем их количество
         texts = [x['text'] for x in data]
-        texts = texts[:100]  # Ограничение
+        # texts = texts[:200]  # Ограничение – можно изменить срез
         total_texts = len(texts)
-        print(f'Текстов дял анализа: {total_texts}')
+        print(f'Текстов для анализа: {total_texts}')
+
+        await redis_db.hset(f"task:{task_data['task_id']}", mapping={
+            "total_texts": str(total_texts),
+        })
 
         # Шаг 1: Дедупликация текстов
         unique_texts_dict: Dict[str, List[int]] = defaultdict(list)
@@ -148,51 +151,80 @@ async def run_llm_query(task_data: dict):
         unique_texts = list(unique_texts_dict.keys())
         unique_total = len(unique_texts)
 
-        llm_labels = [None] * len(texts)  # Инициализируем список меток
+        # Инициализируем список меток для всех текстов
+        llm_labels = [None] * len(texts)
 
-        client = AsyncClient(host='http://localhost:11434')  # Создаем клиент один раз
-        semaphore = asyncio.Semaphore(10)  # Возможное увеличение семафора
+        # Создаём клиента один раз
+        client = AsyncClient(host='http://localhost:11434')
+        semaphore = asyncio.Semaphore(10)  # Ограничение одновременных запросов
+        et = time.time()
 
-        et = time.time() 
+        # Путь для сохранения файла (используем абсолютный путь, избегая изменения CWD)
+        file_location = f'/home/dev/fastapi/analytics_app/data/{task_data["user_id"]}/bertopic_files_directory/{task_data["folder_name"]}/'
+        os.makedirs(file_location, exist_ok=True)
+        # Имя файла (будет использоваться при каждом сохранении)
+        file_name = f'my_list_llm_ans_{indexes[int(task_data["index"])]}_{current_time}.pkl'
+        file_full_path = os.path.join(file_location, file_name)
 
-        async def process_unique_text(text):
+        THRESHOLD = 100  # Сохраняем файл после накопления 100 новых обновлений
+        
+        # Функция для сохранения результатов в файл (вызывается через asyncio.to_thread)
+        async def save_labels():
+            await asyncio.to_thread(_save_labels)
+
+        def _save_labels():
+            # Полная перезапись файла с текущим состоянием llm_labels
+            with open(file_full_path, 'wb') as file:
+                pickle.dump(llm_labels, file)
+            # print(f'Сохранено {file_full_path} в {datetime.now().strftime("%H:%M:%S")}')
+
+        # Функция, которая обрабатывает один уникальный текст и возвращает результат вместе с самим текстом
+        async def process_unique_text(text: str):
             if len(text) < 8:
                 label = "Короткий текст"
             elif len(text) > 25000:
                 label = "Длинный текст"
             else:
                 payload = {
-                    "model": "Vikhr_Q3",
+                    "model": "erwan2/DeepSeek-R1-Distill-Qwen-14B",
                     "messages": [
                         {
                             "role": "user",
-                            "content": (
-                                f"У меня есть следующий текст:\n{text}\n\n{task_data['promt_question']}"
-                            )
+                            "content": f"У меня есть следующий текст:\n{text}\n\n{task_data['promt_question']}"
                         }
                     ]
                 }
+                try:
+                    with torch.no_grad():
+                        response = await client.chat(model='Vikhr_Q3', messages=payload['messages'])
+                    if response and 'message' in response and 'content' in response['message']:
+                        label = response['message']['content']
+                    else:
+                        label = "bad_request"
+                except Exception as e:
+                    label = "bad_request"
+                    await redis_db.hincrby(f"task:{task_data['task_id']}", "bad_request", 1)
+            count = len(unique_texts_dict[text])
+            return text, count, label
 
-                with torch.no_grad():
-                    response = await client.chat(model='Vikhr_Q3', messages=payload['messages'])
-                    label = response['message']['content'] if response else "bad response"
-
-            count = len(unique_texts_dict[text])  # Получаем количество обработанных текстов для данного уникального текста
-            return count, label  # Возвращаем количество обработанных текстов и метку
-
-        async def generate_with_semaphore(text):
+        async def generate_with_semaphore(text: str):
             async with semaphore:
                 return await process_unique_text(text)
 
         async def main():
             completed = 0
-            labels = []
+            new_count_since_save = 0
             tasks = [generate_with_semaphore(text) for text in unique_texts]
 
+            # Обрабатываем результаты по мере их завершения
             for future in asyncio.as_completed(tasks):
-                count, label = await future
+                unique_text, count, label = await future
+                indices = unique_texts_dict[unique_text]
+                for idx in indices:
+                    llm_labels[idx] = label
+
                 completed += count
-                labels.append(label)
+                new_count_since_save += count
 
                 progress = round((completed / total_texts) * 100, 1)
                 await redis_db.hset(f"task:{task_data['task_id']}", mapping={
@@ -201,18 +233,26 @@ async def run_llm_query(task_data: dict):
                     "progress": progress
                 })
 
-            for i, label in enumerate(labels):
-                for idx in unique_texts_dict[unique_texts[i]]:
-                    llm_labels[idx] = label
+                # Если накоплено THRESHOLD новых результатов, сохраняем файл
+                if new_count_since_save >= THRESHOLD:
+                    await save_labels()
+                    new_count_since_save = 0
+
+            # Если остались необсохранённые обновления – сохраняем файл
+            if new_count_since_save > 0:
+                await save_labels()
 
         await main()
-        print('LLM Complete')
-
-        file_location = f'/home/dev/fastapi/analytics_app/data/{task_data["user_id"]}/bertopic_files_directory/{task_data["folder_name"]}/'
-        os.makedirs(os.path.dirname(file_location), exist_ok=True)
-        os.chdir(file_location)
-        with open(f'my_list_llm_ans_{indexes[int(task_data["index"])]}_{current_time}.pkl', 'wb') as file:
-            pickle.dump(llm_labels, file)
+    #     print('LLM Complete. Итоговое время: {:.2f} с'.format(time.time() - start_time))
+    # except Exception as e:
+    #     print(f"Ошибка в run_llm_query: {e}")
+    #     raise
+    # finally:
+    #     # В блоке finally гарантируется итоговое сохранение llm_labels
+    #     try:
+    #         await save_labels()
+    #     except Exception as e:
+    #         print(f"Ошибка при финальном сохранении: {e}")
 
         # # Закрываем клиент после завершения всех запросов 
         # await client.aclose()

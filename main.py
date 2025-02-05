@@ -256,6 +256,13 @@ class AuthorInfGraph(BaseModel):
     viewsCount: Union[int, str]
     timeCreate: str
 
+    @validator("timeCreate", pre=True)
+    def convert_time_create(cls, value):
+        # если приходит int, приводим к строке
+        if isinstance(value, int):
+            return str(value)
+        return value
+
 
 class RepostInfGraph(BaseModel):
     fullname: str
@@ -271,9 +278,9 @@ class RepostInfGraph(BaseModel):
 
 class AuthorsStream(BaseModel):
     author: AuthorInfGraph
-    reposts: List[RepostInfGraph]
+    reposts: Optional[List[RepostInfGraph]]
 
-
+ 
 class ModelInfGraph(BaseModel):
     values: List[AuthorsStream]
     dynamicdata_audience: dict
@@ -642,132 +649,223 @@ def process_authors_data(authors_hub):
 
 
 @app.get('/information_graph', tags=['data analytics'])
-async def information_graph(index: int = None, 
-                             min_date: int = None, max_date: int = None, 
-                             query_str: Optional[str] = 'карта', 
+async def information_graph(index: int=None, 
+                             min_date: int=None, max_date: int=None, query_str: Optional[str] = 'карта', 
                              post: Optional[bool] = None, repost: Optional[bool] = None, 
                              SMI: Optional[bool] = None) -> ModelInfGraph:
+    # Путь к файлу с темами 
     file_path = '/home/dev/fastapi/analytics_app/data/indexes.pkl'
+    # Загрузка словаря с темами
     indexes = load_dict_from_pickle(file_path)
 
-    data = elastic_query(theme_index=indexes[index], min_date=min_date, 
-                         max_date=max_date, query_str=query_str)
+    repost = bool(repost) if repost is not None else False
+    post = bool(post) if post is not None else False
+    SMI = bool(SMI) if SMI is not None else False
+    repost_value = bool(repost) if repost is not None else False
 
+    # делаем запрос на текстовый поиск
+    data = elastic_query(theme_index=indexes[index], query_str=query_str)
+    # data = es.search(index='skillfactory_zaprosy_na_obuchenie_15.01.2024-21.01.2024', query_str='data')
+
+    # отфильтровываем по необходимой дате из календаря
+    data = [x for x in data if min_date <= x['timeCreate'] <= max_date]
     num_messages = len(data)
+    
+    # if post == None:
+    #     post = False
+    # if repost == None:
+    #     repost = False
+    # if SMI == None:
+    #     SMI = False
 
-    post = post if post is not None else False
-    repost = repost if repost is not None else False
-    SMI = SMI if SMI is not None else False
-
+    # предобработка данных
     df_meta = pd.DataFrame(data)
+    # del data
 
     count_vectorizer = CountVectorizer()
-    vector_matrix = count_vectorizer.fit_transform(df_meta['text'].values)
+    vector_matrix = count_vectorizer.fit_transform(
+        df_meta['text'].values)
+
     cosine_similarity_matrix = cosine_similarity(vector_matrix)
+
     dff = pd.DataFrame(cosine_similarity_matrix)
-    np.fill_diagonal(dff.values, 0)  # Убираем диагональ
 
-    df_meta = df_meta.join(pd.DataFrame(list(df_meta['authorObject'].values),
-                    columns=['fullname', 'text_url', 'author_type', 'sex', 'age']))
+    val_dff = dff.values
+    # заменяем значения по главной диагонали на 0
+    for i in range(len(val_dff)):
+        val_dff[i][i] = 0
+        
+    dff = pd.DataFrame(val_dff)
+
+    df_meta = df_meta.join(pd.DataFrame(list(df_meta['authorObject'].values), columns=['fullname', 'text_url', 'author_type', 'sex', 'age']))
+    # заменяем пустые fullname в СМИ на значения из hub
     df_meta['fullname'].fillna(df_meta['hub'], inplace=True)
+    df = df_meta.copy()
 
+    # создаем словарь похожих текстов вида {12: [11, 13],  44: [190], ...}
     fin_dict = {}
-    threshold = 0.8
+    threashhold = 0.8
 
+    # выявляем список строк с похожими текстам
     for i in range(dff.shape[0]):
-        similar_indices = list(np.where(dff.loc[i].values >= threshold)[0])
-        if similar_indices:
-            if i not in [item for sublist in fin_dict.values() for item in sublist]:
-                fin_dict[i] = similar_indices
+        if list(np.where(dff.loc[i].values >= threashhold)[0]) != []:
+            if i not in [item for sublist in list(fin_dict.values()) for item in sublist]:
+                fin_dict[i] = list(
+                    np.where(dff.loc[i].values >= threashhold)[0])
+                
         else:
             fin_dict[i] = []
-
+            
+            
     df_meta.fillna('', inplace=True)
+    # оставляем необходимую мету
     df_meta = df_meta[['fullname', 'url', 'author_type', 'hub', 'sex', 'age', 'audienceCount', 'er', 'viewsCount', 'timeCreate']]
 
+
+    # получение итогового массива данных с последовательностями авторов распространения информации и репостами (похожими текстами)
     data = []
+
     for key, val in fin_dict.items():
         author_dct = {}
         author_dct['author'] = df_meta.loc[key].to_dict()
-        author_dct['author']['timeCreate'] = str(df_meta.loc[key]['timeCreate'])
+        
+        # преобразование age в строку
+        if isinstance(author_dct['author']['age'], int):
+            author_dct['author']['age'] = str(author_dct['author']['age'])
+
         author_dct['reposts'] = []
-        for i in val:
-            repost_data = df_meta.loc[i].to_dict()
-            repost_data['timeCreate'] = str(repost_data['timeCreate'])
+        
+        if len(val) > 0:
+            for i in range(len(val)):
+                repost = df_meta.loc[val[i]].to_dict()
+                repost['viewsCount'] = str(repost['viewsCount'])
+                repost['timeCreate'] = str(repost['timeCreate'])
+                
+                # преобразование age в строку
+                if isinstance(repost['age'], int):
+                    repost['age'] = str(repost['age'])
 
-            # Изменяем viewsCount на строку
-            repost_data['viewsCount'] = str(repost_data['viewsCount'])
-
-            author_dct['reposts'].append(repost_data)
+                author_dct['reposts'].append(RepostInfGraph(**repost))
+        
         data.append(author_dct)
 
-    # Преобразование временной метки
-    df_meta['timeCreate'] = pd.to_datetime(df_meta['timeCreate'], errors='coerce')
-    df_meta.sort_values(by='timeCreate', inplace=True)
-    df_meta.reset_index(drop=True, inplace=True)
+    ### данные для динамического графика
+    def to_datetime(unixtime):
+        return datetime.fromtimestamp(unixtime)
+    
+    df['timeCreate'] = df['timeCreate'].apply(to_datetime)
+    df.sort_values(by='timeCreate', inplace=True)
+    df.reset_index(inplace=True)
+    df.drop('index', axis=1, inplace=True)
 
-    bins = pd.date_range(start=df_meta['timeCreate'].min(), end=df_meta['timeCreate'].max(), freq='600T')
-    df_meta['cut'] = pd.cut(df_meta['timeCreate'], bins=bins, right=False)
-    df_meta['cut'] = df_meta['cut'].astype(str).replace('nan', str(bins[-1]))
-    df_meta['cut'] = df_meta['cut'].apply(lambda x: x.split(',')[0].replace('[', ''))
+    bins = pd.date_range(np.min(df['timeCreate'].values), np.max(df['timeCreate'].values), freq='600T') # по 10 минут
 
+    df['cut'] = pd.cut(df['timeCreate'], bins, right=False)
+    df = df.astype(str)
+    df['cut'] = [x.replace('nan', str(bins[-1])) if x == 'nan' else x for x in df['cut'].values]
+    df['cut'] = [x.split(',')[0].replace("[", '') for x in df['cut'].values]
+    # df.loc[0, 'timeCreate'] = df.loc[0, 'timeCreate'] + timedelta(minutes=9)
+    # df.loc[df.shape[0]-1, 'timeCreate'] = df.loc[df.shape[0]-1, 'timeCreate'] - timedelta(minutes=9)
+
+    # мержинг данных на 10 минутки
     df_bins = pd.DataFrame(bins, columns=['cut']).astype(str).set_index('cut')
-    df = df_bins.join(df_meta.set_index('cut')).fillna('')
-    df['timeCreate'] = df.index
-    df.reset_index(drop=True, inplace=True)
+    df_bins['cut'] = list(df_bins.index)
+
+    df = df_bins.set_index('cut').join(df.set_index('cut'))
+    df.fillna('', inplace=True)
+
+    df['timeCreate'] = list(df.index)
+    df.reset_index(inplace=True)
+    df.reset_index(inplace=True)
+    df.drop(['index', 'cut'], axis=1, inplace=True)
     df = df[['hub', 'timeCreate', 'audienceCount']]
-    df['audienceCount'] = df['audienceCount'].replace('', 0).astype(int)
 
-    unique_hubs = df['hub'].unique()
+    df['audienceCount'] = [int(x) if x != '' else x for x in df['audienceCount'].values]
+    listhubs = [x for x in list(set(df['hub'].values)) if x != '']
+    set_timeCreate = set(df['timeCreate'].values)
 
-    for hub in unique_hubs:
-        hub_data = df[df['hub'] == hub]
-        missing_times = pd.Index(bins).difference(hub_data['timeCreate'])
-        for missing_time in missing_times:
-            df = pd.concat([df, pd.DataFrame({'hub': [hub], 'timeCreate': [missing_time], 'audienceCount': [0]})], ignore_index=True)
-
-    # Убедимся, что timeCreate действительно в формате Timestamp
-    df['timeCreate'] = pd.to_datetime(df['timeCreate'], errors='coerce')
-
-    # Сортировка значений
+    # добавляем не заполненные N-минутки по источнику данными по времени и 0 по аудитории (т.е. в этот период 10 мин не было сообщ)
+    for i in range(len(listhubs)):
+        
+        df_ban = df[df['hub'] == listhubs[i]]
+        # недостающие временные отрезки
+        delta_set = set_timeCreate - set(df_ban['timeCreate'].values)
+            
+        if delta_set != set():
+            df_need = pd.DataFrame(zip([listhubs[i]]*len(delta_set), delta_set, [0]*len(delta_set)))
+            df_need.columns = ['hub', 'timeCreate', 'audienceCount']
+            df = pd.concat([df, df_need], ignore_index=True)
+        
+        else:
+            df_need = pd.DataFrame(zip([listhubs[i]]*len(set_timeCreate), set_timeCreate, [0]*len(set_timeCreate)))
+            df_need.columns = ['hub', 'timeCreate', 'audienceCount']
+            df = pd.concat([df, df_need], ignore_index=True)
+        
     df.sort_values(by='timeCreate', inplace=True)
 
-    # Преобразование данных по хабу
-    hub_data_dicts = {hub: hub_df.set_index('timeCreate')['audienceCount'].to_dict() for hub, hub_df in df.groupby('hub')}
-    
-    dynamicdata_audience = {}
-    for hub, audience_data in hub_data_dicts.items():
-        dynamicdata_audience[hub] = {str(int(dt.timestamp())): str(aud) for dt, aud in audience_data.items()}
+    # подготовка итогового словаря с hub и аудиторией
+    hub_dcts = [df[df['hub'] == x][['timeCreate', 'audienceCount']].set_index('timeCreate').to_dict() for x in listhubs]
 
-    # Компактизируем все данные по времени
-    dynamicdata_audience = {key: ChainMap(*[{k: v} for k, v in audience_data.items()]) for key, audience_data in dynamicdata_audience.items()}
+    for i in range(len(hub_dcts)):
+        hub_dcts[i][listhubs[i]] = hub_dcts[i].pop('audienceCount')
 
-    for key, values in dynamicdata_audience.items():
-        total_audience = sum(int(val) for val in values.values())
-        dynamicdata_audience[key] = {int(k): str(total_audience) for k in values.keys()}
+    dynamicdata_audience = []
+    for i in range(len(hub_dcts)):
+        hub_data = {}
+        cumulative_audience = 0
+        for key, val in hub_dcts[i][listhubs[i]].items():
+            cumulative_audience += val
+            hub_data[str(int(time.mktime(datetime.strptime(key, "%Y-%m-%d %H:%M:%S").timetuple())))] = str(cumulative_audience)
+        dynamicdata_audience.append({listhubs[i]: hub_data})
 
+    # мин и макс даты в выбранном интервале времени (10 мни, 20 мин..)
+    mind, maxd = list(dynamicdata_audience[0][list(dynamicdata_audience[0].keys())[0]].keys())[0], list(dynamicdata_audience[0][list(dynamicdata_audience[0].keys())[0]].keys())[-1]
+
+    dynamicdata_audience = dict(ChainMap(*dynamicdata_audience))
+
+    # def sum_data(lst): # последовательно накапливает/суммирует кол-во по аудитории по столбцу..[1, 2, 4, 0, 2] -> [1, 3, 7, 7, 9..] 
+    #     for i in range(len(lst)-1):
+    #         lst[i+1] = lst[i] + lst[i+1]
+    #     return lst
+
+    # for key in dynamicdata_audience.keys():
+    #     dynamicdata_audience[key] = dict(zip([int(x[0]) for x in dynamicdata_audience[key].items()], [str(x) for x in sum_data([int(x[1]) for x in dynamicdata_audience[key].items()])]))
+
+    # Подсчет количества сообщений
     print(f"Количество сообщений: {num_messages}")
 
     def count_unique_authors(data):
         authors = set()
-        for item in data:
-            authors.add(item['author']['fullname'])
-            for repost in item.get('reposts', []):
-                authors.add(repost['fullname'])
-        return len(authors)
+        try:
+            for item in data:
+                authors.add(item['author']['fullname'])  # Полное имя автора
+                if 'reposts' in item and item['reposts']:
+                    for repost in item['reposts']:
+                        authors.add(repost.fullname)  # Полное имя из репостов
+        except Exception as e:
+            print(f"Произошла ошибка: {e}")
+            print(item)
+        
+        return len(authors)  # Добавлено возвращаемое значение
 
-    num_unique_authors = count_unique_authors(data)
-    print(f"Количество уникальных авторов: {num_unique_authors}")
+    # В вашем основном обработчике
+    num_unique_authors = count_unique_authors(data)  # Теперь будет корректно считать количество уникальных авторов
 
-    return ModelInfGraph(
-        values=data,
-        post=post,
-        repost=repost,
+    # Проверка на корректность boolean значение
+    repost_value = bool(repost) if repost is not None else False
+
+    # Формирование результата
+    values = ModelInfGraph(
+        values=data, 
+        post=post, 
+        repost=repost_value,  # Убедитесь, что здесь передается boolean
         SMI=SMI,
-        dynamicdata_audience=dynamicdata_audience,
-        num_messages=num_messages,
-        num_unique_authors=num_unique_authors
+        dynamicdata_audience=dynamicdata_audience, 
+        num_messages=num_messages, 
+        num_unique_authors=num_unique_authors  # Теперь должно быть корректное целое число
     )
+    
+    return values
 
 
 @app.get("/themes")
@@ -927,7 +1025,7 @@ async def themes_analize(user: User = Depends(current_user), index: int =None,
 
 
 @app.get("/voice", tags=['data analytics'])
-async def voice_analize(user: User = Depends(current_user), index: int = None, 
+async def voice_analize(index: int = None, # user: User = Depends(current_user), 
                              min_date: int=None, max_date: int=None, query_str: str = None) -> ModelVoice:
     # Путь к файлу с темами 
     file_path = '/home/dev/fastapi/analytics_app/data/indexes.pkl'
@@ -1041,26 +1139,28 @@ def media_rating(index: int = None, min_date: int=None,
     # Загрузка словаря с темами
     indexes = load_dict_from_pickle(file_path)
 
-    # делаем запрос на текстовый поиск
+    # Делаем запрос на текстовый поиск
     data = elastic_query(theme_index=indexes[index], query_str='all')
     # data = es.search(index='skillfactory_zaprosy_na_obuchenie_15.01.2024-21.01.2024', query_str='data')
 
-    # отфильтровываем по необходимой дате из календаря
+    # Отфильтровываем по необходимой дате из календаря
     data = [x for x in data if min_date <= x['timeCreate'] <= max_date]
+    data = data[:100]
     df = pd.DataFrame(data)
 
-    # метаданные
-    # разбивка и сборка соцмедиа и СМИ в один датафрэйм с данными
+    # Если в данных есть столбец citeIndex, заменяем пустые строки на 0
+    if 'citeIndex' in df.columns:
+        df['citeIndex'] = df['citeIndex'].apply(lambda x: 0 if x == "" else x)
+
+    # метаданные: разбивка и сборка соцмедиа и СМИ в один датафрэйм с данными
     df_meta = pd.DataFrame()
 
-    # случай выгрузки темы только по СМИ
+    # Случай выгрузки темы только по СМИ (нет столбца hubtype)
     if 'hubtype' not in df.columns:
-
-        dff = df
-        dff['timeCreate'] = [datetime.fromtimestamp(x).strftime(
-            '%Y-%m-%d %H:%M:%S') for x in dff['timeCreate'].values]
-        df_meta_smi_only = dff[[
-            'timeCreate', 'hub', 'toneMark', 'audience', 'url', 'text', 'citeIndex']]
+        dff = df.copy()
+        dff['timeCreate'] = [datetime.fromtimestamp(x).strftime('%Y-%m-%d %H:%M:%S') for x in dff['timeCreate'].values]
+        df_meta_smi_only = dff[['timeCreate', 'hub', 'toneMark', 'audience', 'url', 'text', 'citeIndex']]
+        # При необходимости можно переименовать столбцы:
         # df_meta_smi_only.columns = ['timeCreate', 'hub', 'toneMark', 'audienceCount', 'url', 'text', 'citeIndex']
         df_meta_smi_only['fullname'] = dff['hub']
         df_meta_smi_only['author_type'] = 'Онлайн-СМИ'
@@ -1070,292 +1170,208 @@ def media_rating(index: int = None, min_date: int=None,
         df_meta_smi_only.dropna(subset=['timeCreate'], inplace=True)
         df_meta_smi_only = df_meta_smi_only.set_index(['timeCreate'])
         df_meta_smi_only['date'] = [x[:10] for x in df_meta_smi_only.index]
-    #     df_meta_smi_only = df_meta_smi_only[columns]
-
         df_meta = df_meta_smi_only
 
+    # Случай, когда присутствует столбец hubtype (выгрузка онлайн-СМИ или соцмедиа)
     if 'hubtype' in df.columns:
-
         for i in range(2):  # Онлайн-СМИ или соцмедиа
-
             if i == 0:
                 dff = df[df['hubtype'] != 'Онлайн-СМИ']
                 if dff.shape[0] != 0:
-
-                    dff['timeCreate'] = [datetime.fromtimestamp(x).strftime(
-                        '%Y-%m-%d %H:%M:%S') for x in dff['timeCreate'].values]
-                    df_meta_socm = dff[['timeCreate', 'hub', 'toneMark',
-                                        'audienceCount', 'url', 'er', 'hubtype', 'text', 'type']]
-                    df_meta_socm['fullname'] = pd.DataFrame.from_records(
-                        dff['authorObject'].values)['fullname'].values
-                    df_meta_socm['author_type'] = pd.DataFrame.from_records(
-                        dff['authorObject'].values)['author_type'].values
-                    df_meta_socm.dropna(
-                        subset=['timeCreate'], inplace=True)
+                    dff['timeCreate'] = [datetime.fromtimestamp(x).strftime('%Y-%m-%d %H:%M:%S') for x in dff['timeCreate'].values]
+                    df_meta_socm = dff[['timeCreate', 'hub', 'toneMark', 'audienceCount', 'url', 'er', 'hubtype', 'text', 'type']]
+                    df_meta_socm['fullname'] = pd.DataFrame.from_records(dff['authorObject'].values)['fullname'].values
+                    df_meta_socm['author_type'] = pd.DataFrame.from_records(dff['authorObject'].values)['author_type'].values
+                    df_meta_socm.dropna(subset=['timeCreate'], inplace=True)
                     df_meta_socm = df_meta_socm.set_index(['timeCreate'])
-                    df_meta_socm['date'] = [x[:10]
-                                            for x in df_meta_socm.index]
-
+                    df_meta_socm['date'] = [x[:10] for x in df_meta_socm.index]
             if i == 1:
                 dff = df[df['hubtype'] == 'Онлайн-СМИ']
                 if dff.shape[0] != 0:
-                    dff['timeCreate'] = [datetime.fromtimestamp(x).strftime(
-                        '%Y-%m-%d %H:%M:%S') for x in dff['timeCreate'].values]
-                    df_meta_smi = dff[['timeCreate', 'hub', 'toneMark',
-                                        'audienceCount', 'url', 'er', 'hubtype', 'text', 'citeIndex']]
+                    dff['timeCreate'] = [datetime.fromtimestamp(x).strftime('%Y-%m-%d %H:%M:%S') for x in dff['timeCreate'].values]
+                    df_meta_smi = dff[['timeCreate', 'hub', 'toneMark', 'audienceCount', 'url', 'er', 'hubtype', 'text', 'citeIndex']]
                     df_meta_smi['fullname'] = dff['hub']
                     df_meta_smi['author_type'] = 'Онлайн-СМИ'
                     df_meta_smi['hubtype'] = 'Онлайн-СМИ'
                     df_meta_smi['type'] = 'Онлайн-СМИ'
                     df_meta_smi.dropna(subset=['timeCreate'], inplace=True)
                     df_meta_smi = df_meta_smi.set_index(['timeCreate'])
-                    df_meta_smi['date'] = [x[:10]
-                                            for x in df_meta_smi.index]
+                    df_meta_smi['date'] = [x[:10] for x in df_meta_smi.index]
 
         if 'df_meta_smi' in locals() and 'df_meta_socm' in locals():
             df_meta = pd.concat([df_meta_socm, df_meta_smi])
-        elif 'df_meta_smi' and 'df_meta_socm' not in locals():
+        elif 'df_meta_smi' in locals():
             df_meta = df_meta_smi
         else:
             df_meta = df_meta_socm
 
-
     if set(df_meta['hub'].values) == {"telegram.org"}:
+        df_meta = df_meta[(df_meta['hubtype'] == 'Мессенджеры каналы') & (df_meta['hub'] == "telegram.org")]
 
-        df_meta = df_meta[(df_meta['hubtype'] == 'Мессенджеры каналы') & (
-            df_meta['hub'] == "telegram.org")]
-
-        # negative smi
-        df_hub_siteIndex = df_meta[(df_meta['hubtype'] == 'Мессенджеры каналы') & (df_meta['toneMark'] == -1)][
-            ['fullname', 'audienceCount']].values
-
-        dict_neg = {}
-        for i in range(len(df_hub_siteIndex)):
-
-            if df_hub_siteIndex[i][0] not in dict_neg.keys():
-
-                dict_neg[df_hub_siteIndex[i][0]] = []
-                dict_neg[df_hub_siteIndex[i][0]].append(
-                    df_hub_siteIndex[i][1])
-
-            else:
-                dict_neg[df_hub_siteIndex[i][0]].append(
-                    df_hub_siteIndex[i][1])
-
-        list_neg = [list(set(x)) for x in dict_neg.values()]
-        list_neg = [[0] if x[0] ==
-                    'n/a' else x for x in list_neg if x != 'n/a']
-        list_neg = [int(x[0]) if x[0] != '' else 0 for x in list_neg]
-
-        for i in range(len(list_neg)):
-            dict_neg[list(dict_neg.keys())[i]] = list_neg[i]
-
-        dict_neg = dict(
-            sorted(dict_neg.items(), key=lambda x: x[1], reverse=True))
-
-        dict_neg_hubs_count = dict(
-            Counter(list(
-                df_meta[(df_meta['hubtype'] == 'Мессенджеры каналы') & (df_meta['toneMark'] == -1)]['fullname'])))
-
-        fin_neg_dict = defaultdict(tuple)
-        # you can list as many input dicts as you want here
-        for d in (dict_neg, dict_neg_hubs_count):
-            for key, value in d.items():
-                fin_neg_dict[key] += (value,)
-
-        list_neg_smi = list(fin_neg_dict.keys())
-        list_neg_smi_index = [x[0] for x in fin_neg_dict.values()]
-        list_neg_smi_massage_count = [x[1] for x in fin_neg_dict.values()]
-
-        # positive smi
-        df_hub_siteIndex = df_meta[(df_meta['hubtype'] == 'Мессенджеры каналы') & (df_meta['toneMark'] == 1)][
-            ['fullname', 'audienceCount']].values
-
-        dict_pos = {}
-        for i in range(len(df_hub_siteIndex)):
-
-            if df_hub_siteIndex[i][0] not in dict_pos.keys():
-
-                dict_pos[df_hub_siteIndex[i][0]] = []
-                dict_pos[df_hub_siteIndex[i][0]].append(
-                    df_hub_siteIndex[i][1])
-
-            else:
-                dict_pos[df_hub_siteIndex[i][0]].append(
-                    df_hub_siteIndex[i][1])
-
-        list_pos = [list(set(x)) for x in dict_pos.values()]
-        list_pos = [[0] if x[0] ==
-                    'n/a' else x for x in list_pos if x != 'n/a']
-        list_pos = [int(x[0]) if x[0] != '' else 0 for x in list_pos]
-
-        for i in range(len(list_pos)):
-            dict_pos[list(dict_pos.keys())[i]] = list_pos[i]
-
-        dict_pos = dict(
-            sorted(dict_pos.items(), key=lambda x: x[1], reverse=True))
-
-        dict_pos_hubs_count = dict(
-            Counter(list(
-                df_meta[(df_meta['hubtype'] == 'Мессенджеры каналы') & (df_meta['toneMark'] == 1)]['fullname'])))
-
-        fin_pos_dict = defaultdict(tuple)
-        # you can list as many input dicts as you want here
-        for d in (dict_pos, dict_pos_hubs_count):
-            for key, value in d.items():
-                fin_pos_dict[key] += (value,)
-
-        list_pos_smi = list(fin_pos_dict.keys())
-        list_pos_smi_index = [x[0] for x in fin_pos_dict.values()]
-        list_pos_smi_massage_count = [x[1] for x in fin_pos_dict.values()]
-
-        # data to bobble graph
-        df_meta['timeCreate'] = list(df_meta.index)
-        
-        bobble = []
-        df_tonality = df_meta[(df_meta['hubtype'] == 'Мессенджеры каналы') & (df_meta['toneMark'] != 0)][
-            ['fullname', 'audienceCount', 'toneMark', 'url']].values
-        index_ton = df_meta[(df_meta['hubtype'] == 'Мессенджеры каналы') & (df_meta['toneMark'] != 0)][
-            ['timeCreate']].values.tolist()
-        date_ton = [x[0] for x in index_ton]
-        date_ton = [int((datetime.datetime.strptime(x, '%Y-%m-%d %H:%M:%S') - datetime.datetime(1970, 1,
-                                                                                                1)).total_seconds() * 1000)
-                    for x in date_ton]
-
-        for i in range(len(df_tonality)):
-            if df_tonality[i][2] == -1:
-                bobble.append([date_ton[i], df_tonality[i][0],
-                                dict_neg[df_tonality[i][0]], -1, df_tonality[i][3]])
-            elif df_tonality[i][2] == 1:
-                bobble.append([date_ton[i], df_tonality[i][0],
-                                dict_pos[df_tonality[i][0]], 1, df_tonality[i][3]])
-
-        for i in range(len(bobble)):
-            if bobble[i][3] == 1:
-                bobble[i][3] = "#32ff32"
-            else:
-                bobble[i][3] = "#FF3232"
-
-
-        data = {
-            "neg_smi_name": list_neg_smi,
-            "neg_smi_count": list_pos_smi_massage_count,
-            "neg_smi_rating": list_neg_smi_index,
-            "pos_smi_name": list_pos_smi,
-            "pos_smi_count": list_pos_smi_massage_count,
-            "pos_smi_rating": list_pos_smi_index,
-
-            "date_bobble": [x[0] for x in bobble],
-            "name_bobble": [x[1] for x in bobble],
-            "index_bobble": [x[2] for x in bobble],
-            "z_index_bobble": [1] * len(bobble),
-            "tonality_index_bobble": [x[3] for x in bobble],
-            "tonality_url": [x[4] for x in bobble],
-        }
-
-        return data
-
-    df_meta = df_meta[df_meta['hubtype'] == 'Онлайн-СМИ']
-
-    # negative smi
-    df_hub_siteIndex = df_meta[(df_meta['hubtype'] == 'Онлайн-СМИ') & (df_meta['toneMark'] == -1)][
-        ['hub', 'citeIndex']].values
-
+    # Negative smi для мессенджерных каналов
+    df_hub_siteIndex = df_meta[(df_meta['hubtype'] == 'Мессенджеры каналы') & (df_meta['toneMark'] == -1)][['fullname', 'audienceCount']].values
     dict_neg = {}
     for i in range(len(df_hub_siteIndex)):
-
         if df_hub_siteIndex[i][0] not in dict_neg.keys():
-
             dict_neg[df_hub_siteIndex[i][0]] = []
             dict_neg[df_hub_siteIndex[i][0]].append(df_hub_siteIndex[i][1])
-
         else:
             dict_neg[df_hub_siteIndex[i][0]].append(df_hub_siteIndex[i][1])
-
     list_neg = [list(set(x)) for x in dict_neg.values()]
-    list_neg = [[0] if x[0] ==
-                'n/a' else x for x in list_neg if x != 'n/a']
+    list_neg = [[0] if x[0] == 'n/a' else x for x in list_neg if x != 'n/a']
     list_neg = [int(x[0]) if x[0] != '' else 0 for x in list_neg]
-
     for i in range(len(list_neg)):
         dict_neg[list(dict_neg.keys())[i]] = list_neg[i]
-
-    dict_neg = dict(
-        sorted(dict_neg.items(), key=lambda x: x[1], reverse=True))
-
-    dict_neg_hubs_count = dict(
-        Counter(list(df_meta[(df_meta['hubtype'] == 'Онлайн-СМИ') & (df_meta['toneMark'] == -1)]['hub'])))
-
+    dict_neg = dict(sorted(dict_neg.items(), key=lambda x: x[1], reverse=True))
+    dict_neg_hubs_count = dict(Counter(list(df_meta[(df_meta['hubtype'] == 'Мессенджеры каналы') & (df_meta['toneMark'] == -1)]['fullname'])))
     fin_neg_dict = defaultdict(tuple)
-    # you can list as many input dicts as you want here
     for d in (dict_neg, dict_neg_hubs_count):
         for key, value in d.items():
             fin_neg_dict[key] += (value,)
-
     list_neg_smi = list(fin_neg_dict.keys())
     list_neg_smi_index = [x[0] for x in fin_neg_dict.values()]
     list_neg_smi_massage_count = [x[1] for x in fin_neg_dict.values()]
 
-    # positive smi
-    df_hub_siteIndex = df_meta[(df_meta['hubtype'] == 'Онлайн-СМИ') & (df_meta['toneMark'] == 1)][
-        ['hub', 'citeIndex']].values
-
+    # Positive smi для мессенджерных каналов
+    df_hub_siteIndex = df_meta[(df_meta['hubtype'] == 'Мессенджеры каналы') & (df_meta['toneMark'] == 1)][['fullname', 'audienceCount']].values
     dict_pos = {}
     for i in range(len(df_hub_siteIndex)):
-
         if df_hub_siteIndex[i][0] not in dict_pos.keys():
-
             dict_pos[df_hub_siteIndex[i][0]] = []
             dict_pos[df_hub_siteIndex[i][0]].append(df_hub_siteIndex[i][1])
-
         else:
             dict_pos[df_hub_siteIndex[i][0]].append(df_hub_siteIndex[i][1])
-
     list_pos = [list(set(x)) for x in dict_pos.values()]
-    list_pos = [[0] if x[0] ==
-                'n/a' else x for x in list_pos if x != 'n/a']
+    list_pos = [[0] if x[0] == 'n/a' else x for x in list_pos if x != 'n/a']
     list_pos = [int(x[0]) if x[0] != '' else 0 for x in list_pos]
-
     for i in range(len(list_pos)):
         dict_pos[list(dict_pos.keys())[i]] = list_pos[i]
-
-    dict_pos = dict(
-        sorted(dict_pos.items(), key=lambda x: x[1], reverse=True))
-
-    dict_pos_hubs_count = dict(
-        Counter(list(df_meta[(df_meta['hubtype'] == 'Онлайн-СМИ') & (df_meta['toneMark'] == 1)]['hub'])))
-
+    dict_pos = dict(sorted(dict_pos.items(), key=lambda x: x[1], reverse=True))
+    dict_pos_hubs_count = dict(Counter(list(df_meta[(df_meta['hubtype'] == 'Мессенджеры каналы') & (df_meta['toneMark'] == 1)]['fullname'])))
     fin_pos_dict = defaultdict(tuple)
-    # you can list as many input dicts as you want here
     for d in (dict_pos, dict_pos_hubs_count):
         for key, value in d.items():
             fin_pos_dict[key] += (value,)
-
     list_pos_smi = list(fin_pos_dict.keys())
     list_pos_smi_index = [x[0] for x in fin_pos_dict.values()]
     list_pos_smi_massage_count = [x[1] for x in fin_pos_dict.values()]
 
-
+    # Приведение timeCreate к списку
     df_meta['timeCreate'] = list(df_meta.index)
 
-    # data to bobble graph
+    # Формирование данных для bobble graph (для мессенджерных каналов)
     bobble = []
-    df_tonality = df_meta[(df_meta['hubtype'] == 'Онлайн-СМИ') & (df_meta['toneMark'] != 0)][
-        ['hub', 'citeIndex', 'toneMark', 'url']].values
-    index_ton = df_meta[(df_meta['hubtype'] == 'Онлайн-СМИ') & (df_meta['toneMark'] != 0)][
-        ['timeCreate']].values.tolist()
+    df_tonality = df_meta[(df_meta['hubtype'] == 'Мессенджеры каналы') & (df_meta['toneMark'] != 0)][['fullname', 'audienceCount', 'toneMark', 'url']].values
+    index_ton = df_meta[(df_meta['hubtype'] == 'Мессенджеры каналы') & (df_meta['toneMark'] != 0)][['timeCreate']].values.tolist()
     date_ton = [x[0] for x in index_ton]
-    date_ton = [int((datetime.strptime(x, '%Y-%m-%d %H:%M:%S') - datetime(1970, 1, 1)).total_seconds() * 1000)
-                for x in date_ton]
+    date_ton = [int((datetime.strptime(x, '%Y-%m-%d %H:%M:%S') - datetime(1970, 1, 1)).total_seconds() * 1000) for x in date_ton]
 
     for i in range(len(df_tonality)):
         if df_tonality[i][2] == -1:
-            bobble.append([date_ton[i], df_tonality[i][0],
-                            dict_neg[df_tonality[i][0]], -1, df_tonality[i][3]])
+            bobble.append([date_ton[i], df_tonality[i][0], dict_neg[df_tonality[i][0]], -1, df_tonality[i][3]])
         elif df_tonality[i][2] == 1:
-            bobble.append([date_ton[i], df_tonality[i][0],
-                            dict_pos[df_tonality[i][0]], 1, df_tonality[i][3]])
+            bobble.append([date_ton[i], df_tonality[i][0], dict_pos[df_tonality[i][0]], 1, df_tonality[i][3]])
+    for i in range(len(bobble)):
+        if bobble[i][3] == 1:
+            bobble[i][3] = "#32ff32"
+        else:
+            bobble[i][3] = "#FF3232"
 
+    data = {
+    "neg_smi_name": list_neg_smi,
+    "neg_smi_count": list_neg_smi_massage_count,
+    "neg_smi_rating": list_neg_smi_index,
+    "pos_smi_name": list_pos_smi,
+    "pos_smi_count": list_pos_smi_massage_count,
+    "pos_smi_rating": list_pos_smi_index,
+    "date_bobble": [x[0] for x in bobble],
+    "name_bobble": [x[1] for x in bobble],
+    "index_bobble": [x[2] for x in bobble],
+    "z_index_bobble": [1] * len(bobble),
+    "tonality_index_bobble": [x[3] for x in bobble],
+    "tonality_url": [x[4] for x in bobble],
+    }
+
+    # Обработка данных для онлайн-СМИ
+    df_meta = df_meta[df_meta['hubtype'] == 'Онлайн-СМИ']
+
+    # Negative smi для онлайн-СМИ
+    if 'citeIndex' in df_meta.columns:
+        df_hub_siteIndex = df_meta[(df_meta['hubtype'] == 'Онлайн-СМИ') & (df_meta['toneMark'] == -1)][['hub', 'citeIndex']].values
+    else:
+        df_hub_siteIndex = df_meta[(df_meta['hubtype'] == 'Онлайн-СМИ') & (df_meta['toneMark'] == -1)][['hub']].values
+
+    dict_neg = {}
+    for i in range(len(df_hub_siteIndex)):
+        if df_hub_siteIndex[i][0] not in dict_neg.keys():
+            dict_neg[df_hub_siteIndex[i][0]] = []
+            # Если значение citeIndex пустое (""), уже преобразовано в 0 выше
+            dict_neg[df_hub_siteIndex[i][0]].append(df_hub_siteIndex[i][1])
+        else:
+            dict_neg[df_hub_siteIndex[i][0]].append(df_hub_siteIndex[i][1])
+    list_neg = [list(set(x)) for x in dict_neg.values()]
+    list_neg = [[0] if x[0] == 'n/a' else x for x in list_neg if x != 'n/a']
+    list_neg = [int(x[0]) if x[0] != '' else 0 for x in list_neg]
+    for i in range(len(list_neg)):
+        dict_neg[list(dict_neg.keys())[i]] = list_neg[i]
+    dict_neg = dict(sorted(dict_neg.items(), key=lambda x: x[1], reverse=True))
+    dict_neg_hubs_count = dict(Counter(list(df_meta[(df_meta['hubtype'] == 'Онлайн-СМИ') & (df_meta['toneMark'] == -1)]['hub'])))
+    fin_neg_dict = defaultdict(tuple)
+    for d in (dict_neg, dict_neg_hubs_count):
+        for key, value in d.items():
+            fin_neg_dict[key] += (value,)
+    list_neg_smi = list(fin_neg_dict.keys())
+    list_neg_smi_index = [x[0] for x in fin_neg_dict.values()]
+    list_neg_smi_massage_count = [x[1] for x in fin_neg_dict.values()]
+
+    # Positive smi для онлайн-СМИ
+    if 'citeIndex' in df_meta.columns:
+        df_hub_siteIndex = df_meta[(df_meta['hubtype'] == 'Онлайн-СМИ') & (df_meta['toneMark'] == 1)][['hub', 'citeIndex']].values
+    else:
+        df_hub_siteIndex = df_meta[(df_meta['hubtype'] == 'Онлайн-СМИ') & (df_meta['toneMark'] == 1)][['hub']].values
+    dict_pos = {}
+    for i in range(len(df_hub_siteIndex)):
+        if df_hub_siteIndex[i][0] not in dict_pos.keys():
+            dict_pos[df_hub_siteIndex[i][0]] = []
+            dict_pos[df_hub_siteIndex[i][0]].append(df_hub_siteIndex[i][1])
+        else:
+            dict_pos[df_hub_siteIndex[i][0]].append(df_hub_siteIndex[i][1])
+    list_pos = [list(set(x)) for x in dict_pos.values()]
+    list_pos = [[0] if x[0] == 'n/a' else x for x in list_pos if x != 'n/a']
+    list_pos = [int(x[0]) if x[0] != '' else 0 for x in list_pos]
+    for i in range(len(list_pos)):
+        dict_pos[list(dict_pos.keys())[i]] = list_pos[i]
+    dict_pos = dict(sorted(dict_pos.items(), key=lambda x: x[1], reverse=True))
+    dict_pos_hubs_count = dict(Counter(list(df_meta[(df_meta['hubtype'] == 'Онлайн-СМИ') & (df_meta['toneMark'] == 1)]['hub'])))
+    fin_pos_dict = defaultdict(tuple)
+    for d in (dict_pos, dict_pos_hubs_count):
+        for key, value in d.items():
+            fin_pos_dict[key] += (value,)
+    list_pos_smi = list(fin_pos_dict.keys())
+    list_pos_smi_index = [x[0] for x in fin_pos_dict.values()]
+    list_pos_smi_massage_count = [x[1] for x in fin_pos_dict.values()]
+
+    # Приведение timeCreate к списку
+    df_meta['timeCreate'] = list(df_meta.index)
+
+    # Формирование данных для bobble graph (для онлайн-СМИ)
+    bobble = []
+    if 'citeIndex' in df_meta.columns:
+        df_tonality = df_meta[(df_meta['hubtype'] == 'Онлайн-СМИ') & (df_meta['toneMark'] != 0)][['hub', 'citeIndex', 'toneMark', 'url']].values
+        index_ton = df_meta[(df_meta['hubtype'] == 'Онлайн-СМИ') & (df_meta['toneMark'] != 0)][['timeCreate']].values.tolist()
+        date_ton = [x[0] for x in index_ton]
+        date_ton = [int((datetime.strptime(x, '%Y-%m-%d %H:%M:%S') - datetime(1970, 1, 1)).total_seconds() * 1000) for x in date_ton]
+    else:
+        df_tonality = df_meta[(df_meta['hubtype'] == 'Онлайн-СМИ') & (df_meta['toneMark'] != 0)][['hub', 'toneMark']].values
+        index_ton = df_meta[(df_meta['hubtype'] == 'Онлайн-СМИ') & (df_meta['toneMark'] != 0)][['timeCreate']].values.tolist()
+        date_ton = [x[0] for x in index_ton]
+        date_ton = [int((datetime.strptime(x, '%Y-%m-%d %H:%M:%S') - datetime(1970, 1, 1)).total_seconds() * 1000) for x in date_ton]
+        
+    for i in range(len(df_tonality)):
+        if df_tonality[i][2] == -1:
+            bobble.append([date_ton[i], df_tonality[i][0], dict_neg[df_tonality[i][0]], -1, df_tonality[i][3]])
+        elif df_tonality[i][2] == 1:
+            bobble.append([date_ton[i], df_tonality[i][0], dict_pos[df_tonality[i][0]], 1, df_tonality[i][3]])
     for i in range(len(bobble)):
         if bobble[i][3] == 1:
             bobble[i][3] = "#32ff32"
@@ -1367,8 +1383,7 @@ def media_rating(index: int = None, min_date: int=None,
     values['first_graph']['negative_smi'] = [{'name': x, "index": y, "message_count": z} for (x, y, z) in zip(list_neg_smi, list_neg_smi_index, list_neg_smi_massage_count)]
     values['first_graph']['positive_smi'] = [{'name': x, "index": y, "message_count": z} for (x, y, z) in zip(list_pos_smi, list_pos_smi_index, list_pos_smi_massage_count)]
 
-    values['second_graph'] = ''
-    values['second_graph'] = [{'name': x, 'time': y, 'index': z, 'url': u,'color': t} for (x,y,z,u,t) in zip([x[1] for x in bobble], [x[0] for x in bobble], [x[2] for x in bobble], [x[4] for x in bobble], [x[3] for x in bobble])]
+    values['second_graph'] = [{'name': x, 'time': y, 'index': z, 'url': u, 'color': t} for (x, y, z, u, t) in zip([b[1] for b in bobble], [b[0] for b in bobble], [b[2] for b in bobble], [b[4] for b in bobble], [b[3] for b in bobble])]
 
     return MediaRatingModel(first_graph=values['first_graph'], second_graph=values['second_graph'])
 
@@ -2131,6 +2146,7 @@ async def llm_run(
             "total_texts": "0",  # Значение "0" всегда строка
             "completed_texts": "0",  # Значение "0" всегда строка
             "progress": "0",  # Значение "0" всегда строка
+            "bad_request": "0"
         }
 
         # Сохраняем задачу в Redis
@@ -2981,7 +2997,7 @@ import aiohttp
 
 class SingleTextRequest(BaseModel):
     user_id: int
-    folder_name: str
+    # folder_name: str
     text: str
     system_prompt: Optional[str] = None 
     prompt_question: str
@@ -3011,7 +3027,7 @@ async def llm_run(
         task_data = {
             "task_id": task_id,
             "user_id": str(analysis_request.user_id),
-            "folder_name": str(analysis_request.folder_name),
+            # "folder_name": str(analysis_request.folder_name),
             "text": str(analysis_request.text),
             "system_prompt": str(analysis_request.system_prompt) if analysis_request.system_prompt else "",
             "prompt_question": str(analysis_request.prompt_question),
@@ -3049,7 +3065,10 @@ async def process_single_text_task(task_id: str, task_data: dict):
         prompt_question = task_data['prompt_question']
 
         # Формируем запрос к LLM
-        await generate_answers(text, prompt_question)
+        result = await generate_answers(text, prompt_question)
+
+        # Сохраняем результат обработки LLM в Redis
+        await redis_db.hset(f"task:{task_id}", "result", result)
 
         # Если необходимо, обновляем статус задачи как завершенную
         await redis_db.hset(f"task:{task_id}", "status", "done")
@@ -3061,7 +3080,7 @@ async def process_single_text_task(task_id: str, task_data: dict):
 async def generate_answers(text: str, prompt_question: str):
     url = "http://localhost:11434/api/generate"
     payload = {
-        "model": "Vikhr_Q3",
+        "model": "erwan2/DeepSeek-R1-Distill-Qwen-14B",
         "prompt": f"{text}\n\n{prompt_question}",
         "stream": False
     }
@@ -3071,7 +3090,9 @@ async def generate_answers(text: str, prompt_question: str):
                 response_json = await response.json()
                 # Обработка ответа от LLM
                 result = response_json.get("response", "")
-                print(f"Ответ LLM: {result}")  # Здесь можете обработать результат по вашему усмотрению
+                print(f"Ответ LLM: {result}")
+                result = result.split('</think>')[1].replace('\n\n', '').replace('\n', '')
+                return result
             else:
                 print(f"Ошибка при запросе к LLM: {response.status}")
 
@@ -3185,131 +3206,151 @@ from sklearn.cluster import DBSCAN
 #     return {"clusters": clusters}
 
 
+# Функция для получения текстов (замените на вашу логику)
 async def get_texts(user_id: int, folder_name: str, file_name: str, session: AsyncSession) -> list:
-    # Здесь должен быть ваш код для получения текстов из базы данных или файлов
-    # Пример ниже – просто заглушка, замените на свою логику получения текстов
     file_name = f"my_list_llm_ans_{file_name}".replace('.html', '.pkl')
     file_path = f"/home/dev/fastapi/analytics_app/data/{user_id}/bertopic_files_directory/{folder_name}/{file_name}"
-    print(file_path)
+    print(f"Loading texts from: {file_path}")
     if not os.path.exists(file_path):
         raise HTTPException(status_code=404, detail="File not found.")
-    
     with open(file_path, 'rb') as f:
-        texts = pickle.load(f)  # Предполагается, что файл содержит список текстов
+        texts = pickle.load(f)  # Файл предполагается, что содержит список текстов
     return texts
 
+def cosine_similarity_vectors(vec1: np.ndarray, norm1: float,
+                                vec2: np.ndarray, norm2: float) -> float:
+    """Вычисляет косинусное сходство между двумя векторами."""
+    if norm1 == 0 or norm2 == 0:
+        return 0.0
+    return np.dot(vec1, vec2) / (norm1 * norm2)
+
+
+# from fastapi import FastAPI, HTTPException, Depends, APIRouter
+# router = APIRouter()
 @app.get("/text_clusters/", tags=['ai analytics'])
-async def get_text_clusters(user_id: int, folder_name: str, file_name: str, 
-                            session: AsyncSession = Depends(get_db), threshold: float = 0.8):
+async def get_text_clusters(user_id: int, folder_name: str, file_name: str,
+                            session: AsyncSession = Depends(get_db),
+                            threshold: float = 0.8):
     if user_id < 1:
         raise HTTPException(status_code=400, detail="user_id must be a positive integer.")
-    
-    texts = await get_texts(user_id, folder_name, file_name, session)
 
+    texts = await get_texts(user_id, folder_name, file_name, session)
     if not texts:
         raise HTTPException(status_code=404, detail="No texts found for clustering.")
 
-    # Векторизация текстов с помощью TF-IDF
+    # Векторизация текстов с использованием TF‑IDF
     vectorizer = TfidfVectorizer()
+    texts = [txt for txt in texts if txt is not None]
     tfidf_matrix = vectorizer.fit_transform(texts)
 
-    # Вычисление косинусного сходства
-    cos_sim = cosine_similarity(tfidf_matrix)
+    # Алгоритм онлайн кластеризации (алгоритм "лидеров")
+    # Будем хранить каждый кластер как словарь с центром (dense вектор), количеством элементов
+    # и списком текстов, входящих в кластер.
+    clusters = []  # Каждый элемент: {'center': ..., 'count': ..., 'texts': [...]}
 
-    # Преобразование сходства в расстояние
-    cos_dist = 1 - cos_sim
-    cos_dist = np.clip(cos_dist, 0, None)  
+    # Для каждого текста вычисляем вектор и пытаемся кластеризовать на лету
+    for idx in range(tfidf_matrix.shape[0]):
+        # Получаем вектор в виде плотного массива
+        vec = tfidf_matrix[idx].toarray().ravel()
+        vec_norm = np.linalg.norm(vec)
+        
+        assigned = False
+        best_sim = -1.0
+        best_cluster_idx = None
+        
+        # Ищем подходящий кластер среди уже созданных
+        for i, cluster in enumerate(clusters):
+            center = cluster['center']
+            center_norm = np.linalg.norm(center)
+            sim = cosine_similarity_vectors(vec, vec_norm, center, center_norm)
+            if sim >= threshold and sim > best_sim:
+                best_sim = sim
+                best_cluster_idx = i
+        
+        if best_cluster_idx is not None:
+            # Добавляем текст в найденный кластер и обновляем центр кластера
+            cluster = clusters[best_cluster_idx]
+            # Пересчёт центра: новый центр = (старый центр * count + новый вектор) / (count + 1)
+            new_count = cluster['count'] + 1
+            new_center = (cluster['center'] * cluster['count'] + vec) / new_count
+            clusters[best_cluster_idx]['center'] = new_center
+            clusters[best_cluster_idx]['count'] = new_count
+            clusters[best_cluster_idx]['texts'].append(texts[idx])
+        else:
+            # Ни один кластер не подошёл, создаём новый
+            clusters.append({
+                'center': vec,
+                'count': 1,
+                'texts': [texts[idx]]
+            })
 
-    # Кластеризация с использованием DBSCAN
-    dbscan = DBSCAN(metric='precomputed', eps=threshold, min_samples=2)
-    labels = dbscan.fit_predict(cos_dist)
-
-    # Создание словаря кластеров
-    # clusters = {}
-    # for idx, label in enumerate(labels):
-    #     # Преобразуем label в строку если это необходимо
-    #     label_key = str(label)
-    #     if label_key not in clusters:
-    #         clusters[label_key] = []
-    #     clusters[label_key].append(texts[idx])  # Добавляем текст в соответствующий кластер
-    
-    # Создание списка для хранения результатов
+    # Формируем список результатов, где каждому тексту сопоставлен номер кластера
     results = []
-    for idx, label in enumerate(labels):
-        results.append((label, texts[idx]))  # Кортеж (номер кластера, текст)
+    for cluster_id, cluster in enumerate(clusters):
+        for txt in cluster['texts']:
+            results.append((cluster_id, txt))
 
-    # Преобразуем кластеры, чтобы убедиться, что все значения сериализуемы
-    # serializable_clusters = {k: list(map(str, v)) for k, v in clusters.items()}
-
-    user_data = await redis_db.hgetall(str(user_id))  # Получаем данные пользователя из Redis
-
+    # Далее – получение пользовательских данных из Redis
+    user_data = await redis_db.hgetall(str(user_id))
+    # Декодирование данных пользователя
     user_data = {key.decode('utf-8'): value.decode('utf-8') for key, value in user_data.items()}
-    # Декодируем JSON-значения в словари
     for key, value in user_data.items():
         try:
             user_data[key] = json.loads(value)
         except json.JSONDecodeError:
             print(f"Ошибка декодирования JSON для ключа {key}: {value}")
-
+    
     if user_data is None:
         raise HTTPException(status_code=404, detail="User not found")
 
-    # Находим нужный HTML-файл
-    html_files = user_data["bertopic_files_directory"].get(folder_name, [])
+    # Поиск нужного HTML‑файла в данных пользователя
+    html_files = user_data.get("bertopic_files_directory", {}).get(folder_name, [])
     html_file_path = None
-
     info_html = {}  # для использования далее в elasticsearch
-    # Ищем файл по указанному имени
+
     for file_info in html_files:
-        if file_info["html-file"] == file_name:
+        if file_info.get("html-file") == file_name:
             info_html = file_info
-            html_file_path = os.path.join("/home/dev/fastapi/analytics_app/data", str(user_id), 
-                                           "bertopic_files_directory", folder_name, file_name)
+            html_file_path = os.path.join("/home/dev/fastapi/analytics_app/data", str(user_id),
+                                          "bertopic_files_directory", folder_name, file_name)
             break
 
     if html_file_path is None or not os.path.exists(html_file_path):
         raise HTTPException(status_code=404, detail="HTML file not found")
 
-    # Поиск в elastic за те же даты и строку поиска
-    # Путь к файлу с темами 
-    file_path = '/home/dev/fastapi/analytics_app/data/indexes.pkl'
-    # Загрузка словаря с темами
-    indexes = load_dict_from_pickle(file_path)
+    # Выполнение запроса в elasticsearch за указанный диапазон дат и с нужной строкой поиска
+    file_path_indexes = '/home/dev/fastapi/analytics_app/data/indexes.pkl'
+    indexes = load_dict_from_pickle(file_path_indexes)
     
-    # делаем запрос на текстовый поиск
-    if info_html['query_str'] is None:
+    if info_html.get('query_str') is None:
         info_html['query_str'] = 'all'
-    # print(info_html['min_date'])
-    # print(info_html['max_date'])
-
-    data = elastic_query(theme_index=indexes[info_html['index_number']], query_str=info_html['query_str'], 
-                         min_date=info_html['min_date'], max_date=info_html['max_date'])
+    
+    data = elastic_query(theme_index=indexes[info_html['index_number']],
+                         query_str=info_html['query_str'],
+                         min_date=info_html['min_date'],
+                         max_date=info_html['max_date'])
     data = pd.DataFrame(data)
 
-    # Объединяем LLM с метаданными
+    # Объединение LLM с метаданными
     data.rename(columns={'url': 'text_url'}, inplace=True)
     data = data.join(pd.DataFrame(list(data['authorObject'].values)))
     data.rename(columns={'url': 'author_url'}, inplace=True)
-    # data = data[['timeCreate', 'hub', 'author_url', 'fullname', 'text_url', 'author_type', 'sex', 'age',
-    #                'hubtype', 'commentsCount', 'audienceCount',
-    #                'repostsCount', 'likesCount', 'er', 'viewsCount',
-    #                'massMediaAudience', 'toneMark', 'country', 'region']]
+    data = data[['timeCreate', 'hub', 'author_url', 'fullname', 'text_url', 'author_type',
+                 'sex', 'age', 'hubtype', 'commentsCount', 'audienceCount',
+                 'repostsCount', 'likesCount', 'er', 'viewsCount',
+                 'toneMark', 'country', 'region']]
 
-    data = data[['timeCreate', 'hub', 'author_url', 'fullname', 'text_url', 'author_type', 'sex', 'age',
-                   'hubtype', 'commentsCount', 'audienceCount',
-                   'repostsCount', 'likesCount', 'er', 'viewsCount',
-                   'toneMark', 'country', 'region']]
-
-    # Получение полной таблицы
-    df_join = pd.DataFrame(results).join(data, how='inner', lsuffix='_df1', rsuffix='_df2')
-    df_join.columns = ['Кластер', 'Тематика текста'] + ['Время', 'Источник', 'Ссылка на автора', 'Автор', 'Ссылка на текст', 'Тип автора', 'Пол', 'Возраст',
-                       'Тип источника', 'Комментариев', 'Аудитория', 'Репостов', 'Лайков', 'Вовлеченность', 'Просмотров',
-                       'Тональность', 'Страна', 'Регион']
+    # Объединение результатов кластеризации с данными из elasticsearch
+    df_results = pd.DataFrame(results, columns=['Кластер', 'Тематика текста'])
+    df_join = df_results.join(data, how='inner', lsuffix='_df1', rsuffix='_df2')
+    df_join.columns = ['Кластер', 'Тематика текста', 'Время', 'Источник', 'Ссылка на автора',
+                       'Автор', 'Ссылка на текст', 'Тип автора', 'Пол', 'Возраст',
+                       'Тип источника', 'Комментариев', 'Аудитория', 'Репостов', 'Лайков',
+                       'Вовлеченность', 'Просмотров', 'Тональность', 'Страна', 'Регион']
 
     return {
-        "cluster_data": df_join.where(pd.notnull(df_join), None).to_dict(orient='records'),  # Замена NaN на None
+        "cluster_data": df_join.where(pd.notnull(df_join), None).to_dict(orient='records')
     }
-    # return {"clusters": serializable_clusters}
 
 
 # from run_llm_embed_query import process_embeddings
