@@ -26,6 +26,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.ext.asyncio import create_async_engine
 from sqlalchemy.orm import sessionmaker
 from collections import defaultdict
+from sqlalchemy import Column, Integer, String, JSON, select
 from config import DB_HOST, DB_NAME, DB_PASS, DB_PORT, DB_USER
 
 import numpy as np
@@ -44,33 +45,66 @@ redis_db = redis.Redis(host='localhost', port=6379, db=0)
 # # Получаем список стоп-слов для русского языка
 # russian_stopwords = stopwords.words("russian")
 
+from sqlalchemy.orm import sessionmaker, declarative_base
+
+# Определяем базовый класс для моделей
+Base = declarative_base()
+
+# Определяем модель для хранения эмбеддингов
+class Embedding(Base):
+    __tablename__ = 'embedding'
+    id = Column(Integer, primary_key=True, index=True)
+    user_id = Column(Integer, nullable=False)
+    filename = Column(String, nullable=False) 
+    # Например, поле для хранения эмбеддингов
+    vectors = Column(JSON, nullable=False)
+
 DATABASE_URL = f"postgresql+asyncpg://{DB_USER}:{DB_PASS}@{DB_HOST}:{DB_PORT}/{DB_NAME}"
 engine = create_async_engine(DATABASE_URL)
 async_session_maker = sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
 
-from sqlalchemy import text
+from sqlalchemy import Column, Integer, String, JSON, Table, MetaData, Text
+from sqlalchemy.future import select
+from sqlalchemy import insert
 
-async def save_embeddings(user_id, filename, folder_name, embeddings, session: AsyncSession):
-    # Проверка типа user_id
-    if not isinstance(user_id, int):
-        user_id = int(user_id)  # Преобразование в int
-    # Проходим по всем эмбеддингам и сохраняем их в БД
-    for embedding in embeddings:
-        # Сериализация эмбеддинга в двоичный формат
-        embedding_serialized = pickle.dumps(embedding)
-        # print(f"Serialized embedding: {embedding_serialized}")
+# Определение метаданных
+metadata = MetaData()
 
-        query = text("""
-        INSERT INTO embeddings (user_id, filename, folder_name, embedding)
-        VALUES (:user_id, :filename, :folder_name, :embedding_serialized)
-        """)  # Используем text для SQL-запроса
-        await session.execute(query, {
-            'user_id': user_id,
-            'filename': filename,
-            'folder_name': folder_name,  # Передаем имя папки
-            'embedding_serialized': embedding_serialized
-        })
-    await session.commit()  # Фиксируем изменения в БД
+# Определение модели таблицы embeddings_pg
+embeddings = Table(
+    "embeddings_pg",
+    metadata,
+    Column("id", Integer, primary_key=True, index=True),
+    Column("user_id", Integer, nullable=False),  # Указан идентификатор пользователя
+    Column("filename", String(255), nullable=False),  # Имя файла
+    Column("folder_name", String(255), nullable=False),  # Имя папки
+    Column("vectors", JSON, nullable=False),  # Поле для хранения эмбеддингов в формате JSON
+)
+
+async def save_embedding_to_pgvector(session: AsyncSession, user_id: int, filename: str, folder_name: str, vectors):
+    # Преобразуем каждый массив NumPy в стандартный список Python
+    vectors_list = []
+    for vector in vectors:
+        if isinstance(vector, np.ndarray):
+            vectors_list.append(vector.tolist())  # Преобразуем в список
+        else:
+            raise TypeError("Каждый элемент векторов должен быть массивом NumPy (ndarray).")
+    
+    # Создаем объект для вставки
+    new_embedding = {
+        "user_id": user_id,
+        "filename": filename,
+        "folder_name": folder_name,
+        "vectors": vectors_list  # Сохраняем список векторов
+    }
+    
+    # Выполняем вставку в базу данных
+    try:
+        await session.execute(insert(embeddings).values(new_embedding))  # Замените your_table на реальную таблицу
+        await session.commit()
+    except Exception as e:
+        print(f"Ошибка при сохранении векторов: {e}")
+
 
 # Установка статуса GPU
 async def set_gpu_status(status: str):
@@ -135,7 +169,7 @@ async def run_llm_query(task_data: dict):
 
         # Получаем тексты и ограничиваем их количество
         texts = [x['text'] for x in data]
-        # texts = texts[:200]  # Ограничение – можно изменить срез
+        texts = texts[:100]  # Ограничение – можно изменить срез
         total_texts = len(texts)
         print(f'Текстов для анализа: {total_texts}')
 
@@ -154,7 +188,7 @@ async def run_llm_query(task_data: dict):
         # Инициализируем список меток для всех текстов
         llm_labels = [None] * len(texts)
 
-        # Создаём клиента один раз
+        # Создаём клиент один раз
         client = AsyncClient(host='http://localhost:11434')
         semaphore = asyncio.Semaphore(10)  # Ограничение одновременных запросов
         et = time.time()
@@ -243,19 +277,6 @@ async def run_llm_query(task_data: dict):
                 await save_labels()
 
         await main()
-    #     print('LLM Complete. Итоговое время: {:.2f} с'.format(time.time() - start_time))
-    # except Exception as e:
-    #     print(f"Ошибка в run_llm_query: {e}")
-    #     raise
-    # finally:
-    #     # В блоке finally гарантируется итоговое сохранение llm_labels
-    #     try:
-    #         await save_labels()
-    #     except Exception as e:
-    #         print(f"Ошибка при финальном сохранении: {e}")
-
-        # # Закрываем клиент после завершения всех запросов 
-        # await client.aclose()
 
         # print(texts[:10])
         elapsed_time = time.time() - et
@@ -270,7 +291,7 @@ async def run_llm_query(task_data: dict):
 
         print('Текстов в llm_labels: {}'.format(len(llm_labels))) 
 
-        pd.DataFrame(zip(texts, llm_labels)).to_excel('/home/dev/fastapi/analytics_app/files/Llm_labels_texts.xlsx', 
+        pd.DataFrame(zip(texts, llm_labels)).to_excel('/home/dev/fastapi/analytics_app/files/Llm_labels_texts_2.xlsx', 
                                                       index=False)
 
         print(llm_labels[:10])
@@ -289,7 +310,7 @@ async def run_llm_query(task_data: dict):
         torch.cuda.empty_cache()
 
         # Обработка эмбеддингов
-        embedding_model = SentenceTransformer("/home/dev/fastapi/analytics_app/data/embed_files/DeepPavlov/rubert-base-cased-sentence")
+        embedding_model = SentenceTransformer("/home/dev/fastapi/analytics_app/data/embed_files/DeepPavlov/rubert-base-cased-sentence") # 768-hidden
         embeddings = []
         num_embeddings = len(llm_labels)
 
@@ -309,7 +330,18 @@ async def run_llm_query(task_data: dict):
                 "embedding_progress": embedding_progress
             })
 
+        # Создаем уникальное имя для файла
+        new_filename = f"{indexes[int(task_data['index'])]}_{current_time}.html"
+        print(new_filename)
+
+        # Проверяем, есть ли созданные эмбеддинги
         if len(embeddings) > 0:
+            # Сохранение эмбеддингов в БД
+            async with AsyncSession(engine) as session:
+                # Пример использования функции сохранения
+                await save_embedding_to_pgvector(session, user_id=int(task_data["user_id"]), filename=new_filename, 
+                                                folder_name=task_data["folder_name"], vectors=embeddings)
+                    
             # Преобразование списка эмбеддингов в массив NumPy
             embeddings = np.array(embeddings)
 
@@ -378,15 +410,13 @@ async def run_llm_query(task_data: dict):
         file_location = f'/home/dev/fastapi/analytics_app/data/{task_data["user_id"]}/bertopic_files_directory/{task_data["folder_name"]}/'
         os.makedirs(os.path.dirname(file_location), exist_ok=True)
         os.chdir(file_location)
-        new_filename = f"{indexes[int(task_data['index'])]}_{current_time}.html"
         fig.write_html(file_location + new_filename)
 
-        print(f'Сохранение эмбеддингов: {len(embeddings_umap)}')
+        # print(f'Сохранение эмбеддингов: {len(embeddings_umap)}')
         # Сохранение эмбеддингов
         # async with AsyncSession(engine) as session:
         #     await save_embeddings(user_id=task_data["user_id"], filename=new_filename, folder_name=task_data['folder_name'], 
         #                           embeddings=embeddings, session=session)
-        print(555777)
 
         filename = 'topic_model_' + new_filename.split('.html')[0]
 
@@ -398,11 +428,6 @@ async def run_llm_query(task_data: dict):
         seconds = total_seconds % 60
         execution_all_time = f"{hours} ч. {minutes} мин. {seconds} сек."
         print('Execution All time:', execution_all_time, 'seconds')
-
-        # hours_elapsed_time = elapsed_time // 3600
-        # minutes_elapsed_time = (elapsed_time % 3600) // 60
-        # seconds_elapsed_time = elapsed_time % 60
-        # execution_llmall_time = f"{hours_elapsed_time} ч. {minutes_elapsed_time} мин. {seconds_elapsed_time} сек."
 
         try:
             os.chdir(file_location)

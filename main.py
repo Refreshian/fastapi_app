@@ -376,11 +376,10 @@ class ModelAiAnalyticsItem(BaseModel):
     timeCreate: int
     text: str
     hub: str
-    audienceCount: None
-    commentsCount: None
-    er: None
+    audienceCount: Optional[int] = None
+    commentsCount: Optional[int] = None
+    er: Optional[float] = None  # Предположим, что это число с плавающей точкой
     url: str
-
 
 class ModelAiAnalytics(BaseModel):
     data: List[ModelAiAnalyticsItem]
@@ -535,8 +534,6 @@ async def tonality_landscape(
     file_path = '/home/dev/fastapi/analytics_app/data/indexes.pkl'
     indexes = load_dict_from_pickle(file_path)
 
-    print(index)
-
     data = elastic_query(theme_index=indexes[index], min_date=min_date, max_date=max_date, query_str='all')
 
     # Обработка данных: заменяем значения в 'hub', если они соответствуют конкретным условиям
@@ -670,13 +667,6 @@ async def information_graph(index: int=None,
     # отфильтровываем по необходимой дате из календаря
     data = [x for x in data if min_date <= x['timeCreate'] <= max_date]
     num_messages = len(data)
-    
-    # if post == None:
-    #     post = False
-    # if repost == None:
-    #     repost = False
-    # if SMI == None:
-    #     SMI = False
 
     # предобработка данных
     df_meta = pd.DataFrame(data)
@@ -1389,8 +1379,7 @@ def media_rating(index: int = None, min_date: int=None,
 
 
 @app.get('/ai-analytics', tags=['ai analytics'])
-async def ai_analytics_get(index: int=None, min_date: int=None, max_date: int=None) -> ModelAiAnalytics: 
-    
+async def ai_analytics_get(index: int = None, min_date: int = None, max_date: int = None) -> ModelAiAnalytics:
     # Путь к файлу с темами 
     file_path = '/home/dev/fastapi/analytics_app/data/indexes.pkl'
     # Загрузка словаря с темами
@@ -1401,10 +1390,10 @@ async def ai_analytics_get(index: int=None, min_date: int=None, max_date: int=No
 
     # отфильтровываем по необходимой дате из календаря
     data = [x for x in data if min_date <= x['timeCreate'] <= max_date]
-    keys = ['id', 'timeCreate', 'text', 'hub', 'audienceCount', 'commentsCount', 'er', 'url'] # ключи для отображения в первой таблице
-    data = [{k: y.get(k, None) for k in keys} for y in data[:100]] # данные для первой таблицы
+    keys = ['id', 'timeCreate', 'text', 'hub', 'audienceCount', 'commentsCount', 'er', 'url']  # ключи для отображения в первой таблице
+    data = [{k: y.get(k, None) for k in keys} for y in data[:100]]  # данные для первой таблицы
     ranges = list(np.arange(0, len(data)))
-    [x.update({'id': y.item()}) for x, y in zip(data, ranges)] # меняем значение id на 0,1,2...для передачи далее при выборе на LLM
+    [x.update({'id': y.item()}) for x, y in zip(data, ranges)]  # меняем значение id на 0,1,2...для передачи далее при выборе на LLM
 
     return ModelAiAnalytics(data=data)
 
@@ -1503,10 +1492,9 @@ async def competitors(query: QueryCompetitors):
     # Обработка данных для каждого theme_ind
     for i in range(len(themes_ind)):
         data = elastic_query(theme_index=indexes[themes_ind[i]], query_str='all')
-        ind_df = [x for x in data if query.min_date <= x['timeCreate'] <= query.max_date]
 
         # Замена audience на audienceCount
-        ind_df = [{"audienceCount" if k == "audience" else k: v for k, v in x.items()} for x in ind_df]
+        ind_df = [{"audienceCount" if k == "audience" else k: v for k, v in x.items()} for x in data]
 
         # Формирование цензури для SMI
         for item in ind_df:
@@ -2580,8 +2568,10 @@ async def add_file(user_id: str, folder_name: str, uploaded_file: UploadFile = F
                 detail=f"Ошибка при загрузке данных из Redis: {str(e)}"
             )
 
-    if uploaded_file.filename.lower() in user_folders.get(folder_name, []):
-        return f"Файл с именем '{uploaded_file.filename}' уже существует в папке '{folder_name}'."
+    # if uploaded_file.filename.lower() in user_folders.get(folder_name, []):
+    #     print(555)
+    #     print(user_folders.get(folder_name, []))
+    #     return f"Файл с именем '{uploaded_file.filename}' уже существует в папке '{folder_name}'."
 
     with open(file_location, "wb+") as file_object:
         shutil.copyfileobj(uploaded_file.file, file_object)
@@ -3097,6 +3087,96 @@ async def generate_answers(text: str, prompt_question: str):
                 print(f"Ошибка при запросе к LLM: {response.status}")
 
 
+class MultipleTextRequest(BaseModel):
+    user_id: int
+    texts: List[str]
+    system_prompt: Optional[str] = None
+    prompt_question: str
+
+async def process_text(text: str, question: str, system_prompt: Optional[str]) -> str:
+    try:
+        async with aiohttp.ClientSession() as session:
+            async with session.post("URL_Ваша_LLM_API", json={
+                "text": text,
+                "question": question,
+                "system_prompt": system_prompt
+            }) as response:
+                if response.status == 200:
+                    result = await response.json()
+                    return result.get("answer", "")
+                else:
+                    logging.error(f"Error calling LLM API: {response.status}")
+                    return ""
+    except Exception as e:
+        logging.error(f"Error processing text: {str(e)}", exc_info=True)
+        return ""
+
+@app.post("/llm-run-multiple/", tags=['ai analytics'])
+async def llm_run_multiple(
+    analysis_request: MultipleTextRequest,
+    background_tasks: BackgroundTasks
+):
+    try:
+        task_id = str(uuid.uuid4())
+        
+        # Запуск обработки текстов в фоновом режиме
+        background_tasks.add_task(process_multiple_texts_task, task_id, analysis_request.dict())
+        
+        return JSONResponse({
+            "task_id": task_id,
+            "status": "processing"
+        })
+    except Exception as e:
+        logging.error(f"Error processing request: {str(e)}", exc_info=True)
+        return JSONResponse(content={"error": "Something went wrong"}, status_code=500)
+
+
+async def process_multiple_texts_task(task_id: str, task_data: dict):
+    try:
+        # Получаем список текстов и вопрос для каждого текста
+        texts = task_data['texts']
+        prompt_question = task_data['prompt_question']
+        system_prompt = task_data.get('system_prompt')
+
+        # Обработка каждого текста
+        results = []
+        for text in texts:
+            result = await generate_answer(text, prompt_question, system_prompt)
+            results.append(result)
+
+        # Сериализуем результаты в JSON перед сохранением в Redis
+        json_results = json.dumps(results)
+        
+        # Сохраняем результаты обработки LLM в Redis
+        await redis_db.hset(f"task:{task_id}", "result", json_results)
+
+        # Обновляем статус задачи как завершенную
+        await redis_db.hset(f"task:{task_id}", "status", "done")
+    except Exception as e:
+        logging.error(f"Error processing task {task_id}: {str(e)}", exc_info=True)
+        await redis_db.hset(f"task:{task_id}", "status", f"failed: {str(e)}")
+
+
+async def generate_answer(text: str, prompt_question: str, system_prompt: Optional[str]):
+    url = "http://localhost:11434/api/generate"
+    payload = {
+        "model": "erwan2/DeepSeek-R1-Distill-Qwen-14B",
+        "prompt": f"{system_prompt}\n\n{text}\n\n{prompt_question}" if system_prompt else f"{text}\n\n{prompt_question}",
+        "stream": False
+    }
+    async with aiohttp.ClientSession() as session:
+        async with session.post(url, json=payload) as response:
+            if response.status == 200:
+                response_json = await response.json()
+                result = response_json.get("response", "")
+                logging.info(f"LLM response: {result}")
+                result = result.split('</think>')[1].replace('\n\n', '').replace('\n', '')
+                return result
+            else:
+                logging.error(f"Error calling LLM API: {response.status}")
+                return ""
+
+
 ########################################### Monitoring ###############################################
 
 @app.get("/gpu_metrics", tags=['metrics'])
@@ -3135,78 +3215,7 @@ from sklearn.metrics.pairwise import cosine_similarity
 from sklearn.cluster import DBSCAN
 
 
-# async def get_embeddings(user_id: int, filename: str, session: AsyncSession) -> Dict[int, List[int]]:
-#     query = text("""
-#     SELECT embedding FROM embeddings
-#     WHERE user_id = :user_id AND filename = :filename
-#     """)
-
-#     result = await session.execute(query, {'user_id': user_id, 'filename': filename})
-#     data = result.fetchall()
-
-#     embeddings = [pickle.loads(row[0]) for row in data]
-
-#     print(f'Количество эмбеддингов: {len(embeddings)}')
-#     print(f'Тип данных embeddings: {type(embeddings)}')
-
-#     if not embeddings:
-#         return {}
-
-#     # Преобразование списка эмбеддингов в массив numpy
-#     embeddings_array = np.array(embeddings)
-
-#     best_n_clusters = 0
-#     best_score = -1
-#     cluster_labels = []
-
-#     # Здесь вы можете изменить верхнюю границу, чтобы получить больше кластеров
-#     for n_clusters in range(2, min(50, len(embeddings_array))):  # Изменение верхней границы на 50
-#         kmeans = KMeans(n_clusters=n_clusters, random_state=42)
-#         labels = kmeans.fit_predict(embeddings_array)
-        
-#         silhouette_avg = silhouette_score(embeddings_array, labels)
-
-#         if silhouette_avg > best_score:
-#             best_score = silhouette_avg
-#             best_n_clusters = n_clusters
-#             cluster_labels = labels
-
-#     # Создание словаря с порядковыми номерами эмбеддингов, распределёнными по кластерам
-#     clusters = {i: [] for i in range(best_n_clusters)}
-#     for idx, label in enumerate(cluster_labels):
-#         clusters[label].append(idx)  # Используем индекс вместо id из базы данных
-
-#     return clusters
-
-# # Эндпойнт для получения кластеров
-# @app.get("/clusters/", tags=['ai analytics'])
-# async def get_clusters(user_id: int, filename: str, n_clusters: int = 10, session: AsyncSession = Depends(get_db)):
-#     if user_id < 1:
-#         raise HTTPException(status_code=400, detail="user_id must be a positive integer.")
-
-#     clusters = await get_embeddings(user_id, filename, session)
-
-#     if not clusters:
-#         raise HTTPException(status_code=404, detail="Embeddings not found or clustering failed.")
-
-#     return {"clusters": clusters}
-
-
-# # Эндпойнт для получения кластеров
-# @app.get("/clusters/", tags=['ai analytics'])
-# async def get_clusters(user_id: int, filename: str, session: AsyncSession = Depends(get_db)):
-#     if user_id < 1:
-#         raise HTTPException(status_code=400, detail="user_id must be a positive integer.")
-
-#     clusters = await get_embeddings(user_id, filename, session)
-
-#     if not clusters:
-#         raise HTTPException(status_code=404, detail="Embeddings not found or clustering failed.")
-    
-#     return {"clusters": clusters}
-
-
-# Функция для получения текстов (замените на вашу логику)
+# Функция для получения текстов
 async def get_texts(user_id: int, folder_name: str, file_name: str, session: AsyncSession) -> list:
     file_name = f"my_list_llm_ans_{file_name}".replace('.html', '.pkl')
     file_path = f"/home/dev/fastapi/analytics_app/data/{user_id}/bertopic_files_directory/{folder_name}/{file_name}"
@@ -3225,8 +3234,31 @@ def cosine_similarity_vectors(vec1: np.ndarray, norm1: float,
     return np.dot(vec1, vec2) / (norm1 * norm2)
 
 
-# from fastapi import FastAPI, HTTPException, Depends, APIRouter
-# router = APIRouter()
+# Определяем базовый класс для моделей
+from sqlalchemy.orm import sessionmaker, declarative_base
+from sqlalchemy import Column, Integer, String, JSON, select
+Base = declarative_base()
+
+# Определяем модель для хранения эмбеддингов
+class Embedding(Base):
+    __tablename__ = 'embedding'
+    id = Column(Integer, primary_key=True, index=True)
+    user_id = Column(Integer, nullable=False)
+    filename = Column(String, nullable=False) 
+    # Например, поле для хранения эмбеддингов
+    vectors = Column(JSON, nullable=False)
+
+
+# Функция для получения эмбеддинга по user_id и filename
+async def get_embedding(session: AsyncSession, user_id: int, file_name: str):
+    stmt = select(Embedding).where(
+        Embedding.user_id == user_id,
+        Embedding.filename == file_name
+    )
+    result = await session.execute(stmt)
+    return result.scalars().first()
+
+
 @app.get("/text_clusters/", tags=['ai analytics'])
 async def get_text_clusters(user_id: int, folder_name: str, file_name: str,
                             session: AsyncSession = Depends(get_db),
@@ -3235,49 +3267,42 @@ async def get_text_clusters(user_id: int, folder_name: str, file_name: str,
         raise HTTPException(status_code=400, detail="user_id must be a positive integer.")
 
     texts = await get_texts(user_id, folder_name, file_name, session)
+    texts = texts[:10]
     if not texts:
         raise HTTPException(status_code=404, detail="No texts found for clustering.")
+    
+    # Получение эмбеддингов из базы данных
+    embedding = await get_embedding(session, user_id, file_name)
+    if embedding is None:
+        raise HTTPException(status_code=404, detail="Embeddings not found for the specified user and file.")
 
-    # Векторизация текстов с использованием TF‑IDF
-    vectorizer = TfidfVectorizer()
-    texts = [txt for txt in texts if txt is not None]
-    tfidf_matrix = vectorizer.fit_transform(texts)
+    vectors = embedding.vectors
+    if not vectors:
+        raise HTTPException(status_code=404, detail="No vectors found in embedding.")
 
-    # Алгоритм онлайн кластеризации (алгоритм "лидеров")
-    # Будем хранить каждый кластер как словарь с центром (dense вектор), количеством элементов
-    # и списком текстов, входящих в кластер.
-    clusters = []  # Каждый элемент: {'center': ..., 'count': ..., 'texts': [...]}
+    clusters = []
 
-    # Для каждого текста вычисляем вектор и пытаемся кластеризовать на лету
-    for idx in range(tfidf_matrix.shape[0]):
-        # Получаем вектор в виде плотного массива
-        vec = tfidf_matrix[idx].toarray().ravel()
-        vec_norm = np.linalg.norm(vec)
+    def calculate_distance(vec1, vec2):
+        """Calculate the Euclidean distance between two vectors."""
+        return np.sqrt(np.sum((np.array(vec1) - np.array(vec2)) ** 2))
+    
+    for idx, vec in enumerate(vectors):
+        found_cluster = False
         
-        assigned = False
-        best_sim = -1.0
-        best_cluster_idx = None
+        for cluster in clusters:
+            # Находим расстояние между вектором и центром кластера
+            distance = calculate_distance(cluster['center'], vec)  # Функция для вычисления расстояния
+            
+            if distance < threshold:
+                new_count = cluster['count'] + 1
+                # Обновляем центр кластера
+                cluster['center'] = [(cluster['center'][i] * cluster['count'] + vec[i]) / new_count for i in range(len(cluster['center']))]
+                cluster['count'] = new_count
+                cluster['texts'].append(texts[idx])
+                found_cluster = True
+                break
         
-        # Ищем подходящий кластер среди уже созданных
-        for i, cluster in enumerate(clusters):
-            center = cluster['center']
-            center_norm = np.linalg.norm(center)
-            sim = cosine_similarity_vectors(vec, vec_norm, center, center_norm)
-            if sim >= threshold and sim > best_sim:
-                best_sim = sim
-                best_cluster_idx = i
-        
-        if best_cluster_idx is not None:
-            # Добавляем текст в найденный кластер и обновляем центр кластера
-            cluster = clusters[best_cluster_idx]
-            # Пересчёт центра: новый центр = (старый центр * count + новый вектор) / (count + 1)
-            new_count = cluster['count'] + 1
-            new_center = (cluster['center'] * cluster['count'] + vec) / new_count
-            clusters[best_cluster_idx]['center'] = new_center
-            clusters[best_cluster_idx]['count'] = new_count
-            clusters[best_cluster_idx]['texts'].append(texts[idx])
-        else:
-            # Ни один кластер не подошёл, создаём новый
+        if not found_cluster:
             clusters.append({
                 'center': vec,
                 'count': 1,
@@ -3299,7 +3324,7 @@ async def get_text_clusters(user_id: int, folder_name: str, file_name: str,
             user_data[key] = json.loads(value)
         except json.JSONDecodeError:
             print(f"Ошибка декодирования JSON для ключа {key}: {value}")
-    
+
     if user_data is None:
         raise HTTPException(status_code=404, detail="User not found")
 
@@ -3348,70 +3373,168 @@ async def get_text_clusters(user_id: int, folder_name: str, file_name: str,
                        'Тип источника', 'Комментариев', 'Аудитория', 'Репостов', 'Лайков',
                        'Вовлеченность', 'Просмотров', 'Тональность', 'Страна', 'Регион']
 
+    df_join.to_excel('/home/dev/fastapi/analytics_app/data/1/cluster_fobii.xlsx', index=False, engine='openpyxl')
+
     return {
         "cluster_data": df_join.where(pd.notnull(df_join), None).to_dict(orient='records')
     }
 
+################################################### RAG ########################################################
+from fastapi import APIRouter, HTTPException, Depends
+from sentence_transformers import SentenceTransformer
+from sklearn.metrics.pairwise import cosine_similarity
+from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy import select, Table, MetaData
+import aiohttp
 
-# from run_llm_embed_query import process_embeddings
+from sqlalchemy import Column, Integer, String, JSON, Table, MetaData, Text
+from sqlalchemy.future import select
+from sqlalchemy import insert
 
-# from pydantic import BaseModel
-# import re
+from sqlalchemy.ext.declarative import declarative_base
 
-# # Модель для запроса обработки LLM
-# class LLMQueryRequest(BaseModel):
-#     prompt_question: str
-#     user_id: str  # Добавляем user_id
-#     folder_name: str  # Добавляем folder_name
-#     file_name: str  # Добавляем folder_name
-#     index: int  # Добавляем index
+Base = declarative_base()
 
-#     def __init__(self, **data):
-#         super().__init__(**data)
-#         self.prompt_question = self.clean_string(self.prompt_question)
+class Embedding(Base):
+    __tablename__ = 'embeddings_pg'
+    id = Column(Integer, primary_key=True, index=True)
+    user_id = Column(Integer, nullable=False)
+    filename = Column(String(255), nullable=False)
+    folder_name = Column(String(255), nullable=False)
+    vectors = Column(JSON, nullable=False)
 
-#     @staticmethod
-#     def clean_string(value: str) -> str:
-#         if value is not None:
-#             value = re.sub(r'[\u0001-\u001F\u007F-\u009F]', '', value)
-#             value = value.replace("'", "")
-#         return value
-    
 
-# @app.post("/run_llm_second_query", tags=["ai analytics"])
-# async def run_llm_second_query_endpoint(
-#     llm_query_request: LLMQueryRequest,
-#     background_tasks: BackgroundTasks
-# ):
-#     try:
-#         # Генерируем уникальный идентификатор для задачи
-#         task_id = str(uuid.uuid4())
+# Загрузка модели SentenceTransformer для создания эмбеддингов
+embedding_model = SentenceTransformer("/home/dev/fastapi/analytics_app/data/embed_files/DeepPavlov/rubert-base-cased-sentence")
 
-#         # Извлекаем данные из входного запроса
-#         index = llm_query_request.index
-#         user_id = llm_query_request.user_id
-#         folder_name = llm_query_request.folder_name
-#         file_name = llm_query_request.file_name
-#         prompt_question = llm_query_request.prompt_question
+async def generate_answers(client, prompt):
+    url = "http://localhost:11434/api/generate"
+    payload = {
+        "model": "erwan2/DeepSeek-R1-Distill-Qwen-14B",  # Vikhr_Q3
+        "prompt": prompt,
+        "stream": False
+    }
+    async with aiohttp.ClientSession() as session:
+        async with session.post(url, json=payload) as response:
+            if response.status == 200:
+                response_json = await response.json()
+                return response_json.get("response", "")
+            else:
+                print(f"Ошибка при запросе к Ollama: {response.status}")
+                return None
 
-#         # Подготовка task_data для передачи в process_embeddings
-#         task_data = {
-#             'index': index,
-#             'task_id': task_id,
-#             'user_id': user_id,
-#             'folder_name': folder_name,
-#             'file_name': file_name
-#         }
+class QueryRequest(BaseModel):
+    query: str
+    user_id: int
+    filename: str
+    folder_name: str
+    num_results: int = 5
+    generate_answer: bool = True
 
-#         # Запуск обработки эмбеддингов в фоновом режиме
-#         background_tasks.add_task(process_embeddings, task_data)
+from ollama import AsyncClient
+# Создаём клиент один раз
+client = AsyncClient(host='http://localhost:11434')
 
-#         return JSONResponse(content={"task_id": task_id, "message": "Processing embeddings started."})
-    
-#     except Exception as e:
-#         logging.error(f"Error in run_llm_second_query: {e}")
-#         raise HTTPException(status_code=500, detail="Error processing request")
-    
+@app.post("/query")
+async def query(request: QueryRequest, session: AsyncSession = Depends(get_db)):
+    try:
+        user_query = request.query
+        user_id = request.user_id
+        filename = request.filename
+        folder_name = request.folder_name
+        num_results = request.num_results
+        generate_answer = request.generate_answer
+
+        # Получение информации из Redis
+        user_data = await redis_db.hgetall(user_id)
+        user_data = {key.decode('utf-8'): value.decode('utf-8') for key, value in user_data.items()}
+        # Декодируем JSON-значения в словари
+        for key, value in user_data.items():
+            try:
+                user_data[key] = json.loads(value)
+            except json.JSONDecodeError:
+                print(f"Ошибка декодирования JSON для ключа {key}: {value}")
+
+        def extract_relevant_part(filename):
+            # Разделяем строку на части по символу '_'
+            parts = filename.split('_')
+            # Объединяем все части до последнего подчеркивания
+            relevant_part = '_'.join(parts[:-2])  # исключаем последние две части
+            return relevant_part
+        
+        # Поиск нужной информации в bertopic_files_directory
+        theme_index = None
+        min_date = None
+        max_date = None
+        query_str = None
+        for item in user_data["bertopic_files_directory"][folder_name]:
+            if item["html-file"] == filename:
+                theme_index = extract_relevant_part(filename)
+                min_date = item["min_date"]
+                max_date = item["max_date"]
+                query_str = item["query_str"]
+                break
+        
+        if theme_index is None:
+            raise HTTPException(status_code=404, detail="Файл не найден")
+        
+        # Получение текстов из Elasticsearch
+        data = elastic_query(theme_index=theme_index, min_date=min_date, max_date=max_date, query_str=query_str)
+        texts = [x['text'] for x in data]
+
+        # Создание эмбеддинга для запроса пользователя
+        query_embedding = embedding_model.encode(user_query, show_progress_bar=False)
+
+        # Извлечение эмбеддингов из базы данных с учетом user_id, filename и folder_name
+        query = select(Embedding).where(
+            Embedding.user_id == user_id,
+            Embedding.filename == filename,
+            Embedding.folder_name == folder_name
+        )
+        result = await session.execute(query)
+        embeddings = result.scalars().all()
+
+        if not embeddings:
+            raise HTTPException(status_code=404, detail="Эмбеддинги не найдены")
+        
+        # Расчет косинусного сходства между запросом и эмбеддингами
+        query_embedding = list(query_embedding)  # Преобразование в одномерный список
+        user_embeddings = [emb.vectors for emb in embeddings][0]  # Преобразование каждого вектора в одномерный список
+
+        print(555999777)
+        print(f'len_user_embeddings: {len(user_embeddings)}')
+
+        # similarities = cosine_similarity([query_embedding], user_embeddings)[0]
+
+        query_embedding_reshaped = np.array(query_embedding).reshape(1, -1)  # Преобразование в двумерный массив для одного запроса
+        user_embeddings_reshaped = np.array(user_embeddings)  # Двумерный массив эмбеддингов пользователей
+
+        similarities = cosine_similarity(query_embedding_reshaped, user_embeddings_reshaped)[0]
+        # print(similarities)
+
+        # Получение индексов наиболее релевантных эмбеддингов
+        # top_indices = similarities.argsort()[-num_results:][::-1]
+        top_indices = np.argpartition(similarities, -num_results)[-num_results:]
+        print(top_indices)
+        # print(similarities.argsort())
+        # print(f'top_indices: {top_indices}')
+
+        # Получение наиболее релевантных текстов
+        top_texts = [texts[i] for i in top_indices]
+        print(777)
+        # print(top_texts)
+
+        if generate_answer:
+            # Генерация ответа с использованием модели генерации текста
+            prompt = f"Query: {user_query}\nContext: {' '.join([texts[i] for i in top_indices])}\nAnswer:"  # Здесь берем тексты по индексам
+            answer = await generate_answers(client=client, prompt=prompt)
+            
+            return {"answer": answer, "top_texts": top_texts}
+        else:
+            return {"top_texts": top_texts}
+
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
 
 
 if __name__ == "__main__":
