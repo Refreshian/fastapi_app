@@ -5,7 +5,7 @@ import time
 import pickle
 import asyncio
 import gc
-import json
+import json 
 import traceback
 import aiohttp
 import torch
@@ -18,6 +18,7 @@ from umap import UMAP
 from hdbscan import HDBSCAN
 from bertopic import BERTopic
 import pandas as pd
+import datamapplot
 
 from torch import bfloat16
 from bertopic.representation import KeyBERTInspired, MaximalMarginalRelevance, TextGeneration
@@ -169,7 +170,7 @@ async def run_llm_query(task_data: dict):
 
         # Получаем тексты и ограничиваем их количество
         texts = [x['text'] for x in data]
-        texts = texts[:100]  # Ограничение – можно изменить срез
+        texts = texts[:500]  # Ограничение – можно изменить срез
         total_texts = len(texts)
         print(f'Текстов для анализа: {total_texts}')
 
@@ -406,24 +407,19 @@ async def run_llm_query(task_data: dict):
 
         fig = topic_model.visualize_documents(llm_labels, reduced_embeddings=embeddings_umap, hide_annotations=True, 
                                         hide_document_hover=False, custom_labels=True)
+        
 
         file_location = f'/home/dev/fastapi/analytics_app/data/{task_data["user_id"]}/bertopic_files_directory/{task_data["folder_name"]}/'
         os.makedirs(os.path.dirname(file_location), exist_ok=True)
-        os.chdir(file_location)
+        os.chdir(file_location) 
         fig.write_html(file_location + new_filename)
-
-        # print(f'Сохранение эмбеддингов: {len(embeddings_umap)}')
-        # Сохранение эмбеддингов
-        # async with AsyncSession(engine) as session:
-        #     await save_embeddings(user_id=task_data["user_id"], filename=new_filename, folder_name=task_data['folder_name'], 
-        #                           embeddings=embeddings, session=session)
 
         filename = 'topic_model_' + new_filename.split('.html')[0]
 
         elapsed_time = time.time() - et
         total_seconds = int(elapsed_time)
 
-        hours = total_seconds // 3600
+        hours = total_seconds // 3600 
         minutes = (total_seconds % 3600) // 60
         seconds = total_seconds % 60
         execution_all_time = f"{hours} ч. {minutes} мин. {seconds} сек."
@@ -448,8 +444,8 @@ async def run_llm_query(task_data: dict):
             "creation_date": str(creation_date.strftime("%Y-%m-%d %H:%M:%S")),
             "execution_llm_time": execution_llm_time,
             "execution_all_time": execution_all_time, 
-            "min_date": task_data['min_date'],
-            "max_date": task_data['max_date'],
+            "min_data": task_data['min_date'],
+            "max_data": task_data['max_date'],
             "index_number": int(task_data['index']),
             "task_id": task_data['task_id'],
             "query_str": task_data['query_str'],
@@ -481,6 +477,11 @@ async def run_llm_query(task_data: dict):
         await redis_db.hset(f"task:{task_data['task_id']}", mapping={"status": "failed", "error": str(e)})
 
     finally:
+
+        await redis_db.hset(f"task:{task_data['task_id']}", mapping={
+            "final_status": "done",
+        })
+
         await reset_gpu_status()
         logging.info(f"GPU статус сброшен. Задача {task_data['task_id']} завершена.")
         print(f"GPU статус сброшен. Задача {task_data['task_id']} завершена.")

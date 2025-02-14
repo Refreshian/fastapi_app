@@ -217,7 +217,7 @@ class ModelAuthorsTonalityLandscape(BaseModel):
     negative_hubs: List[NegativeHub]
     positive_hubs: List[PositiveHub]
 
-class Text(BaseModel):
+class TextData(BaseModel):
     text: str
     hub: str
     url: str
@@ -232,7 +232,7 @@ class AuthorDatum(BaseModel):
     sex: Optional[str]
     age: Optional[str]
     count_texts: Optional[int]
-    texts: List[Text]
+    texts: List[TextData]
 
 class ModeAuthorValues(BaseModel):
     author_data: List[AuthorDatum]
@@ -536,6 +536,8 @@ async def tonality_landscape(
 
     data = elastic_query(theme_index=indexes[index], min_date=min_date, max_date=max_date, query_str='all')
 
+    print(data[:3])
+
     # Обработка данных: заменяем значения в 'hub', если они соответствуют конкретным условиям
     for entry in data:
         if 'hub' in entry:
@@ -616,7 +618,7 @@ def process_authors_data(authors_hub):
                     texts = []
                     for text_item in author[1]:
                         try:
-                            text = Text(
+                            text = TextData(
                                 text=text_item.get('text', ''),
                                 hub=text_item.get('hub', ''),
                                 url=text_item.get('url', ''),
@@ -813,14 +815,6 @@ async def information_graph(index: int=None,
 
     dynamicdata_audience = dict(ChainMap(*dynamicdata_audience))
 
-    # def sum_data(lst): # последовательно накапливает/суммирует кол-во по аудитории по столбцу..[1, 2, 4, 0, 2] -> [1, 3, 7, 7, 9..] 
-    #     for i in range(len(lst)-1):
-    #         lst[i+1] = lst[i] + lst[i+1]
-    #     return lst
-
-    # for key in dynamicdata_audience.keys():
-    #     dynamicdata_audience[key] = dict(zip([int(x[0]) for x in dynamicdata_audience[key].items()], [str(x) for x in sum_data([int(x[1]) for x in dynamicdata_audience[key].items()])]))
-
     # Подсчет количества сообщений
     print(f"Количество сообщений: {num_messages}")
 
@@ -858,160 +852,160 @@ async def information_graph(index: int=None,
     return values
 
 
-@app.get("/themes")
-async def themes_analize(user: User = Depends(current_user), index: int =None, 
-                             min_date=None, max_date=None) -> ThemesModel:
-    # Путь к файлу с темами 
-    file_path = '/home/dev/fastapi/analytics_app/data/indexes.pkl'
-    # Загрузка словаря с темами
-    indexes = load_dict_from_pickle(file_path)
+# @app.get("/themes")
+# async def themes_analize(user: User = Depends(current_user), index: int =None, 
+#                              min_date=None, max_date=None) -> ThemesModel:
+#     # Путь к файлу с темами 
+#     file_path = '/home/dev/fastapi/analytics_app/data/indexes.pkl'
+#     # Загрузка словаря с темами
+#     indexes = load_dict_from_pickle(file_path)
 
-    os.chdir('/home/dev/fastapi/analytics_app/files')
-    # данные с описанием тематик
-    # filename = indexes[index] + '_LLM'
-    os.chdir('/home/dev/fastapi/analytics_app/files/Росбанк/')
-    filename = 'rosbank_01.04.2024-15.04.2024_LLM'
-    with open (filename, 'rb') as fp:
-        data = pickle.load(fp)
+#     os.chdir('/home/dev/fastapi/analytics_app/files')
+#     # данные с описанием тематик
+#     # filename = indexes[index] + '_LLM'
+#     os.chdir('/home/dev/fastapi/analytics_app/files/Росбанк/')
+#     filename = 'rosbank_01.04.2024-15.04.2024_LLM'
+#     with open (filename, 'rb') as fp:
+#         data = pickle.load(fp)
 
 
-    data = [x[0]['generated_text'].split('model\n')[1] if len(x) == 1 else x for x in data]
-    data = pd.DataFrame(data) 
+#     data = [x[0]['generated_text'].split('model\n')[1] if len(x) == 1 else x for x in data]
+#     data = pd.DataFrame(data) 
 
-    # print(data)
+#     # print(data)
 
-    query = {
-            "size": 10000,
-            "query": {
-                        "range": {
-                            "timeCreate": {      # skillfactory_zaprosy_na_obuchenie_15.01.2024-21.01.2024
-                                "gte": min_date, # 1705329992
-                                "lte": max_date, # 1705848392
-                                "boost": 2.0
-                            }
-                        }
-                    }
-                }
+#     query = {
+#             "size": 10000,
+#             "query": {
+#                         "range": {
+#                             "timeCreate": {      # skillfactory_zaprosy_na_obuchenie_15.01.2024-21.01.2024
+#                                 "gte": min_date, # 1705329992
+#                                 "lte": max_date, # 1705848392
+#                                 "boost": 2.0
+#                             }
+#                         }
+#                     }
+#                 }
     
-    # данные с авторами, текстами и метаинформацией
-    # dict_train = es.search(index='skillfactory_15.01.2024-21.01.2024', body=query)
-    dict_train = es.search(index=indexes[index], body=query)
-    dict_train = dict_train['hits']['hits']
-    dict_train = [x['_source'] for x in dict_train]
+#     # данные с авторами, текстами и метаинформацией
+#     # dict_train = es.search(index='skillfactory_15.01.2024-21.01.2024', body=query)
+#     dict_train = es.search(index=indexes[index], body=query)
+#     dict_train = dict_train['hits']['hits']
+#     dict_train = [x['_source'] for x in dict_train]
     
-    # with codecs.open(indexes[index], "r", "utf_8_sig") as train_file:
-    #     dict_train = json.load(train_file)
+#     # with codecs.open(indexes[index], "r", "utf_8_sig") as train_file:
+#     #     dict_train = json.load(train_file)
 
-    columns = ['timeCreate', 'text', 'hub', 'url', 'hubtype',
-        'commentsCount', 'audienceCount',
-        'citeIndex', 'repostsCount', 'likesCount', 'er', 'viewsCount',
-        'toneMark', 'role',
-        'country', 'region', 'city', 'language', 'fullname',
-        'author_url', 'author_type', 'sex', 'age']
+#     columns = ['timeCreate', 'text', 'hub', 'url', 'hubtype',
+#         'commentsCount', 'audienceCount',
+#         'citeIndex', 'repostsCount', 'likesCount', 'er', 'viewsCount',
+#         'toneMark', 'role',
+#         'country', 'region', 'city', 'language', 'fullname',
+#         'author_url', 'author_type', 'sex', 'age']
 
-    author_df = pd.DataFrame(list(pd.DataFrame(dict_train)['authorObject'].values))
-    author_df.columns=['fullname', 'author_url', 'author_type', 'sex', 'age']
-    df_res = pd.DataFrame(dict_train).join(author_df)
-    df_res = df_res[columns]
-    # df_res.columns = ['Время', 'Текст', 'Источник', 'Ссылка', 'Тип источника', 'Комментариев', 'Аудитория',
-    #        'Сайт-Индекс', 'Репостов', 'Лайков', 'Суммарная вовлеченность', 'Просмотров',
-    #        'Тональность', 'Роль', 'Страна',
-    #        'Регион', 'Город', 'Язык', 'Имя автора', 'Ссылка на автора', 'Тип автора',
-    #        'Пол', 'Возраст']
+#     author_df = pd.DataFrame(list(pd.DataFrame(dict_train)['authorObject'].values))
+#     author_df.columns=['fullname', 'author_url', 'author_type', 'sex', 'age']
+#     df_res = pd.DataFrame(dict_train).join(author_df)
+#     df_res = df_res[columns]
+#     # df_res.columns = ['Время', 'Текст', 'Источник', 'Ссылка', 'Тип источника', 'Комментариев', 'Аудитория',
+#     #        'Сайт-Индекс', 'Репостов', 'Лайков', 'Суммарная вовлеченность', 'Просмотров',
+#     #        'Тональность', 'Роль', 'Страна',
+#     #        'Регион', 'Город', 'Язык', 'Имя автора', 'Ссылка на автора', 'Тип автора',
+#     #        'Пол', 'Возраст']
 
-    df_res = df_res.join(data)
-    df_res = df_res[(df_res['timeCreate'] >= int(min_date)) & (df_res['timeCreate'] <= int(max_date))]
-    df_res.reset_index(inplace=True)
-    df_res.drop('index', axis=1, inplace=True)
+#     df_res = df_res.join(data)
+#     df_res = df_res[(df_res['timeCreate'] >= int(min_date)) & (df_res['timeCreate'] <= int(max_date))]
+#     df_res.reset_index(inplace=True)
+#     df_res.drop('index', axis=1, inplace=True)
 
-    data = df_res[[0]]
+#     data = df_res[[0]]
 
-    # функция для удаления лишних символов в текстах
-    import re
-    regex = re.compile("[А-Яа-я:=!\)\()A-z\_\%/|]+")
+#     # функция для удаления лишних символов в текстах
+#     import re
+#     regex = re.compile("[А-Яа-я:=!\)\()A-z\_\%/|]+")
 
-    def words_only(text, regex=regex):
-        try:
-            return " ".join(regex.findall(text))
-        except:
-            return ""
+#     def words_only(text, regex=regex):
+#         try:
+#             return " ".join(regex.findall(text))
+#         except:
+#             return ""
 
-    # удаляем лишние символы, оставляем слова
-    data[0] = data[0].apply(words_only)
+#     # удаляем лишние символы, оставляем слова
+#     data[0] = data[0].apply(words_only)
 
-    # получение векторов текстов и сравнение
-    count_vectorizer = CountVectorizer()
-    vector_matrix = count_vectorizer.fit_transform(
-        data[0].values)
+#     # получение векторов текстов и сравнение
+#     count_vectorizer = CountVectorizer()
+#     vector_matrix = count_vectorizer.fit_transform(
+#         data[0].values)
 
-    cosine_similarity_matrix = cosine_similarity(vector_matrix)
-    dff = pd.DataFrame(cosine_similarity_matrix)
-    # dff = dff.round(5)
-    # dff = dff.replace([1.000], 0)
+#     cosine_similarity_matrix = cosine_similarity(vector_matrix)
+#     dff = pd.DataFrame(cosine_similarity_matrix)
+#     # dff = dff.round(5)
+#     # dff = dff.replace([1.000], 0)
 
-    val_dff = dff.values
-    # заменяем значения по главной диагонали на 0
-    for i in range(len(val_dff)):
-        val_dff[i][i] = 0
+#     val_dff = dff.values
+#     # заменяем значения по главной диагонали на 0
+#     for i in range(len(val_dff)):
+#         val_dff[i][i] = 0
         
-    dff = pd.DataFrame(val_dff)
+#     dff = pd.DataFrame(val_dff)
 
-    # создаем словарь похожих текстов вида {11: [12, 132],  44: [190], ...}
-    fin_dict = {}
-    threashhold = 0.70
+#     # создаем словарь похожих текстов вида {11: [12, 132],  44: [190], ...}
+#     fin_dict = {}
+#     threashhold = 0.70
 
-    # print('threashhold')
+#     # print('threashhold')
 
-    # выявляем список строк с похожими текстам
-    for i in range(dff.shape[0]):
-        if list(np.where(dff.loc[i].values >= threashhold)[0]) != []:
-            if i not in [item for sublist in list(fin_dict.values()) for item in sublist]:
+#     # выявляем список строк с похожими текстам
+#     for i in range(dff.shape[0]):
+#         if list(np.where(dff.loc[i].values >= threashhold)[0]) != []:
+#             if i not in [item for sublist in list(fin_dict.values()) for item in sublist]:
 
-                fin_dict[i] = list(
-                    np.where(dff.loc[i].values >= threashhold)[0])
+#                 fin_dict[i] = list(
+#                     np.where(dff.loc[i].values >= threashhold)[0])
                 
-        else:
-            fin_dict[i] = []
+#         else:
+#             fin_dict[i] = []
             
-    len_val = [len(x) for x in fin_dict.values()]
-    dct_len_val = dict(zip(list(fin_dict.keys()), len_val))
-    # dct_len_val = dict(sorted(dct_len_val.items(), key=itemgetter(1), reverse=True))
+#     len_val = [len(x) for x in fin_dict.values()]
+#     dct_len_val = dict(zip(list(fin_dict.keys()), len_val))
+#     # dct_len_val = dict(sorted(dct_len_val.items(), key=itemgetter(1), reverse=True))
 
-    # добавление текстов и метаданных в итоговый словарь
-    fin_data = []
-    texts = []
-    texts_list = data.loc[list(fin_dict.keys())][0].values # список текстов с описанием, берется первое описание по первому тексту-ключу
-    list_len = list(dct_len_val.values()) # список с количеством текстов по тематике
-    # [{'description': 'Тема текста связана с ..', 'count': 152, 'texts': [...]},
-    #  {'description': 'Тема текста связана с ..', 'count': 141, 'texts': [...]}, ..]
+#     # добавление текстов и метаданных в итоговый словарь
+#     fin_data = []
+#     texts = []
+#     texts_list = data.loc[list(fin_dict.keys())][0].values # список текстов с описанием, берется первое описание по первому тексту-ключу
+#     list_len = list(dct_len_val.values()) # список с количеством текстов по тематике
+#     # [{'description': 'Тема текста связана с ..', 'count': 152, 'texts': [...]},
+#     #  {'description': 'Тема текста связана с ..', 'count': 141, 'texts': [...]}, ..]
 
-    for i in range(len(fin_dict.keys())):
+#     for i in range(len(fin_dict.keys())):
         
-        if fin_dict[list(fin_dict.keys())[i]] != []:
+#         if fin_dict[list(fin_dict.keys())[i]] != []:
 
-            a = {}
-            a['description'] = texts_list[i] # описание тематики
-            a['count'] = list_len[i] # количество текстов по тематике
-            a['audience'] = str(np.sum([x['audienceCount'] for x in df_res.iloc[fin_dict[list(fin_dict.keys())[i]]].to_dict(orient='records') if x['audienceCount'] != ''])) # количество аудитории в тематике
-            a['er'] = str(np.sum([x['er'] for x in df_res.iloc[fin_dict[list(fin_dict.keys())[i]]].to_dict(orient='records') if x['er'] != ''])) # количество вовлеченности в тематику
-            a['viewsCount'] = str(np.sum([x['viewsCount'] for x in df_res.iloc[fin_dict[list(fin_dict.keys())[i]]].to_dict(orient='records') if x['viewsCount'] != '']))# количество просмотров в тематике
-            a['texts'] = 'texts' 
-            # texts.append(df_res[df_res.index.isin(fin_dict[list(fin_dict.keys())[i]])].to_dict(orient='records'))
-            fin_data.append(a)
+#             a = {}
+#             a['description'] = texts_list[i] # описание тематики
+#             a['count'] = list_len[i] # количество текстов по тематике
+#             a['audience'] = str(np.sum([x['audienceCount'] for x in df_res.iloc[fin_dict[list(fin_dict.keys())[i]]].to_dict(orient='records') if x['audienceCount'] != ''])) # количество аудитории в тематике
+#             a['er'] = str(np.sum([x['er'] for x in df_res.iloc[fin_dict[list(fin_dict.keys())[i]]].to_dict(orient='records') if x['er'] != ''])) # количество вовлеченности в тематику
+#             a['viewsCount'] = str(np.sum([x['viewsCount'] for x in df_res.iloc[fin_dict[list(fin_dict.keys())[i]]].to_dict(orient='records') if x['viewsCount'] != '']))# количество просмотров в тематике
+#             a['texts'] = 'texts' 
+#             # texts.append(df_res[df_res.index.isin(fin_dict[list(fin_dict.keys())[i]])].to_dict(orient='records'))
+#             fin_data.append(a)
             
-        else:
+#         else:
             
-            a = {}
-            a['description'] = texts_list[i] # описание тематики
-            a['count'] = list_len[i] # количество текстов по тематике
-            a['audience'] = str(np.sum([x['audienceCount'] for x in df_res.iloc[fin_dict[list(fin_dict.keys())[i]]].to_dict(orient='records') if x['audienceCount'] != ''])) # количество аудитории в тематике
-            a['er'] = str(np.sum([x['er'] for x in df_res.iloc[fin_dict[list(fin_dict.keys())[i]]].to_dict(orient='records') if x['er'] != ''])) # количество вовлеченности в тематику
-            a['viewsCount'] = str(np.sum([x['viewsCount'] for x in df_res.iloc[fin_dict[list(fin_dict.keys())[i]]].to_dict(orient='records') if x['viewsCount'] != '']))# количество просмотров в тематике
-            a['texts'] = 'texts'
-            # texts.append(df_res.iloc[[list(fin_dict.keys())[i]]].to_dict(orient='records'))
-            fin_data.append(a)
+#             a = {}
+#             a['description'] = texts_list[i] # описание тематики
+#             a['count'] = list_len[i] # количество текстов по тематике
+#             a['audience'] = str(np.sum([x['audienceCount'] for x in df_res.iloc[fin_dict[list(fin_dict.keys())[i]]].to_dict(orient='records') if x['audienceCount'] != ''])) # количество аудитории в тематике
+#             a['er'] = str(np.sum([x['er'] for x in df_res.iloc[fin_dict[list(fin_dict.keys())[i]]].to_dict(orient='records') if x['er'] != ''])) # количество вовлеченности в тематику
+#             a['viewsCount'] = str(np.sum([x['viewsCount'] for x in df_res.iloc[fin_dict[list(fin_dict.keys())[i]]].to_dict(orient='records') if x['viewsCount'] != '']))# количество просмотров в тематике
+#             a['texts'] = 'texts'
+#             # texts.append(df_res.iloc[[list(fin_dict.keys())[i]]].to_dict(orient='records'))
+#             fin_data.append(a)
   
-    return ThemesModel(values=fin_data)
+#     return ThemesModel(values=fin_data)
 
 
 @app.get("/voice", tags=['data analytics'])
@@ -1379,14 +1373,15 @@ def media_rating(index: int = None, min_date: int=None,
 
 
 @app.get('/ai-analytics', tags=['ai analytics'])
-async def ai_analytics_get(index: int = None, min_date: int = None, max_date: int = None) -> ModelAiAnalytics:
+async def ai_analytics_get(index: int = None, min_date: int = None, 
+                           max_date: int = None, query_str: str = None) -> ModelAiAnalytics:
     # Путь к файлу с темами 
     file_path = '/home/dev/fastapi/analytics_app/data/indexes.pkl'
     # Загрузка словаря с темами
     indexes = load_dict_from_pickle(file_path)
     
     # делаем запрос на текстовый поиск
-    data = elastic_query(theme_index=indexes[index], query_str='all')
+    data = elastic_query(theme_index=indexes[index], query_str=query_str)
 
     # отфильтровываем по необходимой дате из календаря
     data = [x for x in data if min_date <= x['timeCreate'] <= max_date]
@@ -2059,8 +2054,11 @@ def save_history(user_id, history_data):
 
 
 from run_llm_query import run_llm_query
+# from test import run_llm_query
+# from test_interactive_embed import run_llm_query
+
 import uuid
-import asyncio
+import asyncio 
 # import redis  # redis-py >= 4.x (или 5.x)
 import traceback
 import redis.asyncio
@@ -2068,7 +2066,7 @@ import redis.asyncio
 @app.on_event("startup")
 async def startup_event():
     try:
-        await redis_db.ping()
+        await redis_db.ping() 
         logging.info("Redis подключен!")
         # Инициализируем статус GPU при старте
         existing_status = await redis_db.get("gpu:status")
@@ -2377,7 +2375,8 @@ async def llm_analyze(user_id: int, folder_name: str, file_name: str):
     file = [file for file in files if file_name.replace('.html', '') in file]
     file = file[0].replace('topic_model_', 'my_list_llm_ans_')
 
-    thematics_path = texts_path + '/' + 'my_list_llm_ans_' + file.replace('.html', '.pkl')
+    # thematics_path = texts_path + '/' + 'my_list_llm_ans_' + file.replace('.html', '.pkl')
+    thematics_path = texts_path + '/' + file.replace('.html', '.pkl')
 
     with open(thematics_path, 'rb') as f:
         texts_thematics = pickle.load(f)
@@ -2576,8 +2575,27 @@ async def add_file(user_id: str, folder_name: str, uploaded_file: UploadFile = F
     with open(file_location, "wb+") as file_object:
         shutil.copyfileobj(uploaded_file.file, file_object)
 
+    # Добавляем или обновляем папку с файлами
     user_folders.setdefault(folder_name, []).append(uploaded_file.filename.lower())
 
+    # Получаем текущие файлы в папке
+    current_files = user_folders[folder_name]
+
+    # Приводим имя файла к нижнему регистру для сравнения
+    file_name_lower = uploaded_file.filename.lower()
+
+    # Проверяем, есть ли файл с таким названием в текущих файлах
+    if file_name_lower in current_files:
+        # Если файл с таким именем существует, удаляем его из списка
+        current_files = [item for item in current_files if item != file_name_lower]
+
+    # После этого добавляем новый файл с именем (или обновленный файл, если он был перезаписан)
+    current_files.append(file_name_lower)
+
+    # Обновляем запись в user_folders
+    user_folders[folder_name] = current_files
+
+    # Обновляем запись в Redis
     await redis_db.hset(user_id, "json_files_directory", json.dumps(user_folders))
 
     # Загрузка файла в Elasticsearch
@@ -2673,6 +2691,8 @@ async def delete_file(user_id: str, directory_type: str, directory_name: str, fi
 
     # Удаляем файл из json_files_directory
     if directory_type == "json_files_directory":
+        print(555)
+        print(folders["json_files_directory"])
         try:
             # Удаляем соответствующий словарь
             if directory_name in folders.get("json_files_directory", {}):
@@ -2683,10 +2703,14 @@ async def delete_file(user_id: str, directory_type: str, directory_name: str, fi
                 await redis_db.hset(user_id, "json_files_directory", json.dumps(schools_data))
 
             # Удаляем файл из файловой системы
+            print(111)
+            print(os.path.join(folder_path, file_name + '.json'))
             os.remove(os.path.join(folder_path, file_name + '.json'))
+            print(222)
 
             return {"message": f"Файл {file_name + '.json'} из директории {directory_name} был успешно удалён!"}
         except Exception as e:
+            print(333)
             raise HTTPException(status_code=500, detail=f"Ошибка при удалении файлов: {str(e)}")
 
 
@@ -3004,48 +3028,48 @@ class SingleTextRequest(BaseModel):
         v = re.sub(r'\s+', ' ', v)
         return v
     
-# Обработка LLM задачи для одного текста
-@app.post("/llm-run-single/", tags=['ai analytics'])
-async def llm_run(
-    analysis_request: SingleTextRequest,
-    background_tasks: BackgroundTasks
-):
-    try:
-        task_id = str(uuid.uuid4())
-        # Создаем task_data на основе входной модели `AnalysisRequest`
-        # Преобразуем данные в строковый формат перед сохранением
-        task_data = {
-            "task_id": task_id,
-            "user_id": str(analysis_request.user_id),
-            # "folder_name": str(analysis_request.folder_name),
-            "text": str(analysis_request.text),
-            "system_prompt": str(analysis_request.system_prompt) if analysis_request.system_prompt else "",
-            "prompt_question": str(analysis_request.prompt_question),
-            "status": "pending"
-        }
+# # Обработка LLM задачи для одного текста
+# @app.post("/llm-run-single/", tags=['ai analytics'])
+# async def llm_run(
+#     analysis_request: SingleTextRequest,
+#     background_tasks: BackgroundTasks
+# ):
+#     try:
+#         task_id = str(uuid.uuid4())
+#         # Создаем task_data на основе входной модели `AnalysisRequest`
+#         # Преобразуем данные в строковый формат перед сохранением
+#         task_data = {
+#             "task_id": task_id,
+#             "user_id": str(analysis_request.user_id),
+#             # "folder_name": str(analysis_request.folder_name),
+#             "text": str(analysis_request.text),
+#             "system_prompt": str(analysis_request.system_prompt) if analysis_request.system_prompt else "",
+#             "prompt_question": str(analysis_request.prompt_question),
+#             "status": "pending"
+#         }
 
-        # Сохраняем задачу в Redis для логирования
-        await redis_db.hset(f"task:{task_id}", mapping=task_data)
+#         # Сохраняем задачу в Redis для логирования
+#         await redis_db.hset(f"task:{task_id}", mapping=task_data)
 
-        # Добавляем задачу в очередь на выполнение
-        background_tasks.add_task(process_single_text_task, task_id, task_data)
+#         # Добавляем задачу в очередь на выполнение
+#         background_tasks.add_task(process_single_text_task, task_id, task_data)
 
-        return JSONResponse(
-            content={
-                "task_id": task_id,
-                "status": "pending",
-                "message": "Task has been added to the queue."
-            },
-            status_code=202
-        )
-    except Exception as e:
-        logging.error(f"Error in llm_run_single: {e}")
-        return JSONResponse(
-            content={
-                "error": str(e)
-            },
-            status_code=500
-        )
+#         return JSONResponse(
+#             content={
+#                 "task_id": task_id,
+#                 "status": "pending",
+#                 "message": "Task has been added to the queue."
+#             },
+#             status_code=202
+#         )
+#     except Exception as e:
+#         logging.error(f"Error in llm_run_single: {e}")
+#         return JSONResponse(
+#             content={
+#                 "error": str(e)
+#             },
+#             status_code=500
+#         )
         
 
 async def process_single_text_task(task_id: str, task_data: dict):
@@ -3118,6 +3142,13 @@ async def llm_run_multiple(
 ):
     try:
         task_id = str(uuid.uuid4())
+
+        # Инициализируем статус задачи на "0"
+        await redis_db.hset(f"task:{task_id}", mapping={
+            "status": "0",
+            "completed_texts": "0",
+            "progress": "0"
+        })
         
         # Запуск обработки текстов в фоновом режиме
         background_tasks.add_task(process_multiple_texts_task, task_id, analysis_request.dict())
@@ -3435,8 +3466,8 @@ from ollama import AsyncClient
 # Создаём клиент один раз
 client = AsyncClient(host='http://localhost:11434')
 
-@app.post("/query")
-async def query(request: QueryRequest, session: AsyncSession = Depends(get_db)):
+@app.post("/rag", tags=['ai analytics'])
+async def rag_query(request: QueryRequest, session: AsyncSession = Depends(get_db)):
     try:
         user_query = request.query
         user_id = request.user_id
@@ -3538,4 +3569,4 @@ async def query(request: QueryRequest, session: AsyncSession = Depends(get_db)):
 
 
 if __name__ == "__main__":
-    uvicorn.run("main:app", host="0.0.0.0", port=5001, reload=True)
+    uvicorn.run("main:app", host="0.0.0.0", port=5002, reload=True)
