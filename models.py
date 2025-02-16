@@ -2,19 +2,8 @@ from datetime import datetime
 
 from sqlalchemy import MetaData, Table, Column, Integer, String, TIMESTAMP, ForeignKey, JSON, Boolean
 from sqlalchemy import *
-from sqlalchemy.ext.declarative import declarative_base
 
 metadata = MetaData()
-
-# conn_string = "host='localhost' dbname='app_ind' user='user' password='postgres'"
-engine = create_engine('postgresql+asyncpg://postgres:ffsfds&fdv12w@localhost:5432/datadb')
-Base = declarative_base()
-
-from sqlalchemy import (
-    Column,
-    Integer,
-    String,
-)
 
 role = Table(
     "role",
@@ -39,5 +28,33 @@ user = Table(
     Column("theme_rules", JSON),
 )
 
-if __name__ == "__main__":
-    Base.metadata.create_all(engine)
+# embeddings = Table(
+#     "embeddings",
+#     metadata,
+#     Column("id", Integer, primary_key=True),
+#     Column("user_id", Integer, ForeignKey(user.c.id), nullable=False),  # Установлен внешний ключ на таблицу user
+#     Column("filename", String(255), nullable=False),
+#     Column("folder_name", String(255), nullable=False),
+#     Column("embedding", LargeBinary, nullable=False),
+#     Column("created_at", TIMESTAMP, default=datetime.utcnow),
+# )
+
+# embedding = Table(
+#     "embedding",
+#     metadata,
+#     Column("id", Integer, primary_key=True, index=True),
+#     Column("user_id", Integer, nullable=False),  # Указан идентификатор пользователя
+#     Column("filename", String(255), nullable=False),  # Имя файла
+#     Column("vectors", JSON, nullable=False),  # Поле для хранения эмбеддингов в формате JSON
+# )
+
+
+embeddings = Table(
+    "embeddings_pg",
+    metadata,
+    Column("id", Integer, primary_key=True, index=True),
+    Column("user_id", Integer, nullable=False),  # Указан идентификатор пользователя
+    Column("filename", String(255), nullable=False),  # Имя файла
+    Column("folder_name", String(255), nullable=False),  # Имя папки
+    Column("vectors", JSON, nullable=False),  # Поле для хранения эмбеддингов в формате JSON
+)

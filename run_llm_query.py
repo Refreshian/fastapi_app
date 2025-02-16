@@ -168,9 +168,10 @@ async def run_llm_query(task_data: dict):
                 max_date=task_data['max_date']
             )
 
+        maxdata = 500
         # Получаем тексты и ограничиваем их количество
         texts = [x['text'] for x in data]
-        texts = texts[:500]  # Ограничение – можно изменить срез
+        texts = texts[:maxdata]  # Ограничение – можно изменить срез
         total_texts = len(texts)
         print(f'Текстов для анализа: {total_texts}')
 
@@ -393,8 +394,8 @@ async def run_llm_query(task_data: dict):
             if label:
                 topic_labels_llama3.append(label)
 
-        for i, label in enumerate(topic_labels_llama3):
-            print(f"Тема {i}: {label}")
+        # for i, label in enumerate(topic_labels_llama3):
+        #     print(f"Тема {i}: {label}")
 
         def shorten_by_words(text, max_words):
             words = text.split()
@@ -411,10 +412,20 @@ async def run_llm_query(task_data: dict):
 
         file_location = f'/home/dev/fastapi/analytics_app/data/{task_data["user_id"]}/bertopic_files_directory/{task_data["folder_name"]}/'
         os.makedirs(os.path.dirname(file_location), exist_ok=True)
-        os.chdir(file_location) 
+        os.chdir(file_location)
         fig.write_html(file_location + new_filename)
 
         filename = 'topic_model_' + new_filename.split('.html')[0]
+
+
+        ###################### save topics over time ########################
+        timestamps = [x['timeCreate'] for x in data][:maxdata]
+        topics_over_time = topic_model.topics_over_time(llm_labels[:maxdata], timestamps, datetime_format="%b%M", nr_bins=20)
+        topics_over_time_viz = topic_model.visualize_topics_over_time(topics_over_time, top_n_topics=20, title='Тематики во времени', 
+                                                                      height=550, custom_labels=True)
+        topic_over_time_filename = f"{indexes[int(task_data['index'])]}_topic_over_time_{current_time}.html"
+        # topics_over_time_viz.save(file_location + topic_over_time_filename)
+        topics_over_time_viz.write_html(file_location + topic_over_time_filename)
 
         elapsed_time = time.time() - et
         total_seconds = int(elapsed_time)

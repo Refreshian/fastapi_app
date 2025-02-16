@@ -1129,7 +1129,7 @@ def media_rating(index: int = None, min_date: int=None,
 
     # Отфильтровываем по необходимой дате из календаря
     data = [x for x in data if min_date <= x['timeCreate'] <= max_date]
-    data = data[:100]
+    # data = data[:100]
     df = pd.DataFrame(data)
 
     # Если в данных есть столбец citeIndex, заменяем пустые строки на 0
@@ -1364,8 +1364,18 @@ def media_rating(index: int = None, min_date: int=None,
 
     values = {}
     values['first_graph'] = {}
-    values['first_graph']['negative_smi'] = [{'name': x, "index": y, "message_count": z} for (x, y, z) in zip(list_neg_smi, list_neg_smi_index, list_neg_smi_massage_count)]
-    values['first_graph']['positive_smi'] = [{'name': x, "index": y, "message_count": z} for (x, y, z) in zip(list_pos_smi, list_pos_smi_index, list_pos_smi_massage_count)]
+    # Сортируем списки по citeIndex в порядке убывания
+    list_neg_smi, list_neg_smi_index, list_neg_smi_massage_count = zip(*sorted(zip(list_neg_smi, list_neg_smi_index, list_neg_smi_massage_count), key=lambda x: x[1], reverse=True))
+    list_pos_smi, list_pos_smi_index, list_pos_smi_massage_count = zip(*sorted(zip(list_pos_smi, list_pos_smi_index, list_pos_smi_massage_count), key=lambda x: x[1], reverse=True))
+
+    # Задаем максимальный размер списков
+    max_size = 100
+    # Берем первые max_size элементов
+    values['first_graph']['negative_smi'] = [{'name': x, "index": y, "message_count": z} for (x, y, z) in zip(list_neg_smi[:max_size], list_neg_smi_index[:max_size], list_neg_smi_massage_count[:max_size])]
+    values['first_graph']['positive_smi'] = [{'name': x, "index": y, "message_count": z} for (x, y, z) in zip(list_pos_smi[:max_size], list_pos_smi_index[:max_size], list_pos_smi_massage_count[:max_size])]
+    
+    # values['first_graph']['negative_smi'] = [{'name': x, "index": y, "message_count": z} for (x, y, z) in zip(list_neg_smi, list_neg_smi_index, list_neg_smi_massage_count)]
+    # values['first_graph']['positive_smi'] = [{'name': x, "index": y, "message_count": z} for (x, y, z) in zip(list_pos_smi, list_pos_smi_index, list_pos_smi_massage_count)]
 
     values['second_graph'] = [{'name': x, 'time': y, 'index': z, 'url': u, 'color': t} for (x, y, z, u, t) in zip([b[1] for b in bobble], [b[0] for b in bobble], [b[2] for b in bobble], [b[4] for b in bobble], [b[3] for b in bobble])]
 
@@ -2053,8 +2063,8 @@ def save_history(user_id, history_data):
         pickle.dump(all_history, file)
 
 
-from run_llm_query import run_llm_query
-# from test import run_llm_query
+# from run_llm_query import run_llm_query
+from test import run_llm_query
 # from test_interactive_embed import run_llm_query
 
 import uuid
@@ -2318,7 +2328,7 @@ async def llm_analyze(user_id: int, folder_name: str, file_name: str):
     # print(info_html['max_date'])
 
     data = elastic_query(theme_index=indexes[info_html['index_number']], query_str=info_html['query_str'], 
-                         min_date=info_html['min_date'], max_date=info_html['max_date'])
+                         min_date=info_html['min_data'], max_date=info_html['max_data'])
     data = pd.DataFrame(data)
 
     # Обработка тематики
@@ -2376,7 +2386,7 @@ async def llm_analyze(user_id: int, folder_name: str, file_name: str):
     file = file[0].replace('topic_model_', 'my_list_llm_ans_')
 
     # thematics_path = texts_path + '/' + 'my_list_llm_ans_' + file.replace('.html', '.pkl')
-    thematics_path = texts_path + '/' + file.replace('.html', '.pkl')
+    thematics_path = texts_path + '/' + 'my_list_llm_ans_' + file.replace('.html', '.pkl')
 
     with open(thematics_path, 'rb') as f:
         texts_thematics = pickle.load(f)
@@ -3569,4 +3579,4 @@ async def rag_query(request: QueryRequest, session: AsyncSession = Depends(get_d
 
 
 if __name__ == "__main__":
-    uvicorn.run("main:app", host="0.0.0.0", port=5002, reload=True)
+    uvicorn.run("main:app", host="0.0.0.0", port=5001, reload=True)
