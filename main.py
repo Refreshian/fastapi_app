@@ -163,14 +163,18 @@ origins = [
     "http://194.146.113.123",
     "https://194.146.113.123",
     "http://194.146.113.123:8000"
+    "http://194.146.113.123:3000",
+    "http://194.146.113.123:8080"
+    "https://tellscope.headsmade.com",
+    "https://tsdoc.headsmade.com"
 ]
 
 app.add_middleware(
     CORSMiddleware,
     allow_origins=origins,
     allow_credentials=True,
-    allow_methods=["*"],  # Или укажите конкретные методы
-    allow_headers=["*"],  # Или укажите конкретные заголовки
+    allow_methods=["*"],  
+    allow_headers=["*"],  
 )
 
 # from fastapi.middleware.httpsredirect import HTTPSRedirectMiddleware
@@ -1192,89 +1196,89 @@ def media_rating(index: int = None, min_date: int=None,
     if set(df_meta['hub'].values) == {"telegram.org"}:
         df_meta = df_meta[(df_meta['hubtype'] == 'Мессенджеры каналы') & (df_meta['hub'] == "telegram.org")]
 
-    # Negative smi для мессенджерных каналов
-    df_hub_siteIndex = df_meta[(df_meta['hubtype'] == 'Мессенджеры каналы') & (df_meta['toneMark'] == -1)][['fullname', 'audienceCount']].values
-    dict_neg = {}
-    for i in range(len(df_hub_siteIndex)):
-        if df_hub_siteIndex[i][0] not in dict_neg.keys():
-            dict_neg[df_hub_siteIndex[i][0]] = []
-            dict_neg[df_hub_siteIndex[i][0]].append(df_hub_siteIndex[i][1])
-        else:
-            dict_neg[df_hub_siteIndex[i][0]].append(df_hub_siteIndex[i][1])
-    list_neg = [list(set(x)) for x in dict_neg.values()]
-    list_neg = [[0] if x[0] == 'n/a' else x for x in list_neg if x != 'n/a']
-    list_neg = [int(x[0]) if x[0] != '' else 0 for x in list_neg]
-    for i in range(len(list_neg)):
-        dict_neg[list(dict_neg.keys())[i]] = list_neg[i]
-    dict_neg = dict(sorted(dict_neg.items(), key=lambda x: x[1], reverse=True))
-    dict_neg_hubs_count = dict(Counter(list(df_meta[(df_meta['hubtype'] == 'Мессенджеры каналы') & (df_meta['toneMark'] == -1)]['fullname'])))
-    fin_neg_dict = defaultdict(tuple)
-    for d in (dict_neg, dict_neg_hubs_count):
-        for key, value in d.items():
-            fin_neg_dict[key] += (value,)
-    list_neg_smi = list(fin_neg_dict.keys())
-    list_neg_smi_index = [x[0] for x in fin_neg_dict.values()]
-    list_neg_smi_massage_count = [x[1] for x in fin_neg_dict.values()]
+        # Negative smi для мессенджерных каналов
+        df_hub_siteIndex = df_meta[(df_meta['hubtype'] == 'Мессенджеры каналы') & (df_meta['toneMark'] == -1)][['fullname', 'audienceCount']].values
+        dict_neg = {}
+        for i in range(len(df_hub_siteIndex)):
+            if df_hub_siteIndex[i][0] not in dict_neg.keys():
+                dict_neg[df_hub_siteIndex[i][0]] = []
+                dict_neg[df_hub_siteIndex[i][0]].append(df_hub_siteIndex[i][1])
+            else:
+                dict_neg[df_hub_siteIndex[i][0]].append(df_hub_siteIndex[i][1])
+        list_neg = [list(set(x)) for x in dict_neg.values()]
+        list_neg = [[0] if x[0] == 'n/a' else x for x in list_neg if x != 'n/a']
+        list_neg = [int(x[0]) if x[0] != '' else 0 for x in list_neg]
+        for i in range(len(list_neg)):
+            dict_neg[list(dict_neg.keys())[i]] = list_neg[i]
+        dict_neg = dict(sorted(dict_neg.items(), key=lambda x: x[1], reverse=True))
+        dict_neg_hubs_count = dict(Counter(list(df_meta[(df_meta['hubtype'] == 'Мессенджеры каналы') & (df_meta['toneMark'] == -1)]['fullname'])))
+        fin_neg_dict = defaultdict(tuple)
+        for d in (dict_neg, dict_neg_hubs_count):
+            for key, value in d.items():
+                fin_neg_dict[key] += (value,)
+        list_neg_smi = list(fin_neg_dict.keys())
+        list_neg_smi_index = [x[0] for x in fin_neg_dict.values()]
+        list_neg_smi_massage_count = [x[1] for x in fin_neg_dict.values()]
 
-    # Positive smi для мессенджерных каналов
-    df_hub_siteIndex = df_meta[(df_meta['hubtype'] == 'Мессенджеры каналы') & (df_meta['toneMark'] == 1)][['fullname', 'audienceCount']].values
-    dict_pos = {}
-    for i in range(len(df_hub_siteIndex)):
-        if df_hub_siteIndex[i][0] not in dict_pos.keys():
-            dict_pos[df_hub_siteIndex[i][0]] = []
-            dict_pos[df_hub_siteIndex[i][0]].append(df_hub_siteIndex[i][1])
-        else:
-            dict_pos[df_hub_siteIndex[i][0]].append(df_hub_siteIndex[i][1])
-    list_pos = [list(set(x)) for x in dict_pos.values()]
-    list_pos = [[0] if x[0] == 'n/a' else x for x in list_pos if x != 'n/a']
-    list_pos = [int(x[0]) if x[0] != '' else 0 for x in list_pos]
-    for i in range(len(list_pos)):
-        dict_pos[list(dict_pos.keys())[i]] = list_pos[i]
-    dict_pos = dict(sorted(dict_pos.items(), key=lambda x: x[1], reverse=True))
-    dict_pos_hubs_count = dict(Counter(list(df_meta[(df_meta['hubtype'] == 'Мессенджеры каналы') & (df_meta['toneMark'] == 1)]['fullname'])))
-    fin_pos_dict = defaultdict(tuple)
-    for d in (dict_pos, dict_pos_hubs_count):
-        for key, value in d.items():
-            fin_pos_dict[key] += (value,)
-    list_pos_smi = list(fin_pos_dict.keys())
-    list_pos_smi_index = [x[0] for x in fin_pos_dict.values()]
-    list_pos_smi_massage_count = [x[1] for x in fin_pos_dict.values()]
+        # Positive smi для мессенджерных каналов
+        df_hub_siteIndex = df_meta[(df_meta['hubtype'] == 'Мессенджеры каналы') & (df_meta['toneMark'] == 1)][['fullname', 'audienceCount']].values
+        dict_pos = {}
+        for i in range(len(df_hub_siteIndex)):
+            if df_hub_siteIndex[i][0] not in dict_pos.keys():
+                dict_pos[df_hub_siteIndex[i][0]] = []
+                dict_pos[df_hub_siteIndex[i][0]].append(df_hub_siteIndex[i][1])
+            else:
+                dict_pos[df_hub_siteIndex[i][0]].append(df_hub_siteIndex[i][1])
+        list_pos = [list(set(x)) for x in dict_pos.values()]
+        list_pos = [[0] if x[0] == 'n/a' else x for x in list_pos if x != 'n/a']
+        list_pos = [int(x[0]) if x[0] != '' else 0 for x in list_pos]
+        for i in range(len(list_pos)):
+            dict_pos[list(dict_pos.keys())[i]] = list_pos[i]
+        dict_pos = dict(sorted(dict_pos.items(), key=lambda x: x[1], reverse=True))
+        dict_pos_hubs_count = dict(Counter(list(df_meta[(df_meta['hubtype'] == 'Мессенджеры каналы') & (df_meta['toneMark'] == 1)]['fullname'])))
+        fin_pos_dict = defaultdict(tuple)
+        for d in (dict_pos, dict_pos_hubs_count):
+            for key, value in d.items():
+                fin_pos_dict[key] += (value,)
+        list_pos_smi = list(fin_pos_dict.keys())
+        list_pos_smi_index = [x[0] for x in fin_pos_dict.values()]
+        list_pos_smi_massage_count = [x[1] for x in fin_pos_dict.values()]
 
-    # Приведение timeCreate к списку
-    df_meta['timeCreate'] = list(df_meta.index)
+        # Приведение timeCreate к списку
+        df_meta['timeCreate'] = list(df_meta.index)
 
-    # Формирование данных для bobble graph (для мессенджерных каналов)
-    bobble = []
-    df_tonality = df_meta[(df_meta['hubtype'] == 'Мессенджеры каналы') & (df_meta['toneMark'] != 0)][['fullname', 'audienceCount', 'toneMark', 'url']].values
-    index_ton = df_meta[(df_meta['hubtype'] == 'Мессенджеры каналы') & (df_meta['toneMark'] != 0)][['timeCreate']].values.tolist()
-    date_ton = [x[0] for x in index_ton]
-    date_ton = [int((datetime.strptime(x, '%Y-%m-%d %H:%M:%S') - datetime(1970, 1, 1)).total_seconds() * 1000) for x in date_ton]
+        # Формирование данных для bobble graph (для мессенджерных каналов)
+        bobble = []
+        df_tonality = df_meta[(df_meta['hubtype'] == 'Мессенджеры каналы') & (df_meta['toneMark'] != 0)][['fullname', 'audienceCount', 'toneMark', 'url']].values
+        index_ton = df_meta[(df_meta['hubtype'] == 'Мессенджеры каналы') & (df_meta['toneMark'] != 0)][['timeCreate']].values.tolist()
+        date_ton = [x[0] for x in index_ton]
+        date_ton = [int((datetime.strptime(x, '%Y-%m-%d %H:%M:%S') - datetime(1970, 1, 1)).total_seconds() * 1000) for x in date_ton]
 
-    for i in range(len(df_tonality)):
-        if df_tonality[i][2] == -1:
-            bobble.append([date_ton[i], df_tonality[i][0], dict_neg[df_tonality[i][0]], -1, df_tonality[i][3]])
-        elif df_tonality[i][2] == 1:
-            bobble.append([date_ton[i], df_tonality[i][0], dict_pos[df_tonality[i][0]], 1, df_tonality[i][3]])
-    for i in range(len(bobble)):
-        if bobble[i][3] == 1:
-            bobble[i][3] = "#32ff32"
-        else:
-            bobble[i][3] = "#FF3232"
+        for i in range(len(df_tonality)):
+            if df_tonality[i][2] == -1:
+                bobble.append([date_ton[i], df_tonality[i][0], dict_neg[df_tonality[i][0]], -1, df_tonality[i][3]])
+            elif df_tonality[i][2] == 1:
+                bobble.append([date_ton[i], df_tonality[i][0], dict_pos[df_tonality[i][0]], 1, df_tonality[i][3]])
+        for i in range(len(bobble)):
+            if bobble[i][3] == 1:
+                bobble[i][3] = "#32ff32"
+            else:
+                bobble[i][3] = "#FF3232"
 
-    data = {
-    "neg_smi_name": list_neg_smi,
-    "neg_smi_count": list_neg_smi_massage_count,
-    "neg_smi_rating": list_neg_smi_index,
-    "pos_smi_name": list_pos_smi,
-    "pos_smi_count": list_pos_smi_massage_count,
-    "pos_smi_rating": list_pos_smi_index,
-    "date_bobble": [x[0] for x in bobble],
-    "name_bobble": [x[1] for x in bobble],
-    "index_bobble": [x[2] for x in bobble],
-    "z_index_bobble": [1] * len(bobble),
-    "tonality_index_bobble": [x[3] for x in bobble],
-    "tonality_url": [x[4] for x in bobble],
-    }
+        data = {
+        "neg_smi_name": list_neg_smi,
+        "neg_smi_count": list_neg_smi_massage_count,
+        "neg_smi_rating": list_neg_smi_index,
+        "pos_smi_name": list_pos_smi,
+        "pos_smi_count": list_pos_smi_massage_count,
+        "pos_smi_rating": list_pos_smi_index,
+        "date_bobble": [x[0] for x in bobble],
+        "name_bobble": [x[1] for x in bobble],
+        "index_bobble": [x[2] for x in bobble],
+        "z_index_bobble": [1] * len(bobble),
+        "tonality_index_bobble": [x[3] for x in bobble],
+        "tonality_url": [x[4] for x in bobble],
+        }
 
     # Обработка данных для онлайн-СМИ
     df_meta = df_meta[df_meta['hubtype'] == 'Онлайн-СМИ']
@@ -1870,18 +1874,15 @@ async def create_data_projector(user_id: str, folder_name: str, file_name: str):
             # Если ключ bertopic_files_directory существует — загружаем его содержимое
             user_folders = json.loads(user_data["projector_files_directory"])
         else:
-            print(222)
             # Если ключа нет — создаём пустой словарь
             user_folders = {}
 
         # Проверяем существование папки, переданной в user_data['folder_name']
         if folder_name in user_folders:
-            print(333)
             # Если папка существует, добавляем новый file_info в уже имеющийся список
             user_folders[folder_name].append(file_info)
         else:
             # Если папка не существует, создаём её и добавляем file_info в список
-            print(444)
             user_folders[folder_name] = [file_info]
 
         # Сериализуем обновлённый объект папок (user_folders) в JSON
@@ -1905,7 +1906,7 @@ async def create_data_projector(user_id: str, folder_name: str, file_name: str):
     return f"Файлы авторов для прожектора темы {file_name} созданы и сохранены в папку {folder_name}!"
 
 
-@app.get('/file-load/{user_id}/{file_type}/{folder_name}/{file_name}')
+@app.get('/file-load/{user_id}/{file_type}/{folder_name}/{file_name}', tags=['files'])
 def load_file(user_id: str, file_type: str, folder_name: str, file_name: str):
     # Логируем параметры запроса для отладки
     print(f"Received request with parameters: user_id={user_id}, file_type={file_type}, folder_name={folder_name}, file_name={file_name}")
@@ -2064,7 +2065,7 @@ def save_history(user_id, history_data):
 
 
 # from run_llm_query import run_llm_query
-from test import run_llm_query
+from run_llm_query_new import run_llm_query
 # from test_interactive_embed import run_llm_query
 
 import uuid
@@ -2076,7 +2077,7 @@ import redis.asyncio
 @app.on_event("startup")
 async def startup_event():
     try:
-        await redis_db.ping() 
+        await redis_db.ping()
         logging.info("Redis подключен!")
         # Инициализируем статус GPU при старте
         existing_status = await redis_db.get("gpu:status")
@@ -2126,35 +2127,34 @@ async def llm_run(
 ):
     try:
         task_id = str(uuid.uuid4())
-        # Создаем task_data на основе входной модели `AnalysisRequest`
-        # Преобразуем данные в строковый формат перед сохранением
         task_data = {
             "task_id": task_id,
             "user_id": str(analysis_request.user_id),
             "folder_name": str(analysis_request.folder_name),
             "index": str(analysis_request.index),
-            "query_str": analysis_request.query_str or "all",  # Используем "all", если `query_str` не передано
-            "min_date": str(analysis_request.min_date),
-            "max_date": str(analysis_request.max_date),
-            "system_prompt": analysis_request.system_prompt or "",  # Пустая строка, если не указано
+            "query_str": analysis_request.query_str or "all", 
+            "min_data": str(analysis_request.min_date),
+            "max_data": str(analysis_request.max_date),
+            "system_prompt": analysis_request.system_prompt or "",
             "promt_question": analysis_request.promt_question or "",
             "status": "pending",
-            "total_texts": "0",  # Значение "0" всегда строка
-            "completed_texts": "0",  # Значение "0" всегда строка
-            "progress": "0",  # Значение "0" всегда строка
+            "total_texts": "0",
+            "completed_texts": "0",
+            "progress": "0",
             "bad_request": "0"
         }
 
-        # Сохраняем задачу в Redis
         await redis_db.hset(f"task:{task_id}", mapping=task_data)
         await redis_db.rpush("queue:tasks", task_id)
 
-        # Преобразуем данные задачи в строковый формат
-        decoded_task = {key: value for key, value in task_data.items()}
+        # Проверка на количество активных задач
+        # active_tasks = await redis_db.get("active_tasks_count") or 0
+        # if int(active_tasks) < 2:
+        #     # Увеличиваем количество активных задач здесь, если текущих задач меньше допустимых
+        #     await redis_db.incr("active_tasks_count")
+        #     background_tasks.add_task(process_task, task_id, task_data, background_tasks)
 
-        # Добавляем задачу в очередь на выполнение
         background_tasks.add_task(process_task, task_id, task_data, background_tasks)
-        # background_tasks.add_task(process_task, next_task_id.decode(), next_task_data, background_tasks)
 
         return JSONResponse(
             content={
@@ -2164,8 +2164,9 @@ async def llm_run(
             },
             status_code=202
         )
+    
     except Exception as e:
-        logger.error(f"Error in llm_run: {e}")
+        logging.error(f"Error in llm_run: {e}")
         return JSONResponse(
             content={
                 "error": str(e)
@@ -2183,8 +2184,21 @@ async def process_task(task_id: str, task_data: dict, background_tasks: Backgrou
 
         # Декодируем данные задачи
         task_data = {k.decode("utf-8"): v.decode("utf-8") for k, v in task_data.items()}
-        task_data["min_date"] = int(task_data["min_date"])
-        task_data["max_date"] = int(task_data["max_date"])
+        # Создаем новый словарь с изменением ключей
+        renamed_data = {}
+        if 'min_date' in task_data:
+            for key, value in task_data.items():
+                if key == 'min_date':
+                    new_key = 'min_data'
+                elif key == 'max_date':
+                    new_key = 'max_data'
+                else:
+                    new_key = key
+                renamed_data[new_key] = value
+                task_data = renamed_data
+
+        task_data["min_data"] = int(task_data["min_data"])
+        task_data["max_data"] = int(task_data["max_data"])
 
         # Устанавливаем блокировку на задачу
         if await redis_db.set(f"lock:task:{task_id}", "1", nx=True, ex=300):
@@ -2215,31 +2229,25 @@ async def process_task(task_id: str, task_data: dict, background_tasks: Backgrou
         logging.info(f"GPU статус сброшен. Задача {task_id} завершена.")
 
 
-@app.get("/status/{task_id}", tags=['ai analytics'])
-async def get_task_status(task_id: str):
-    # Ожидаем асинхронный вызов метода hgetall
-    task_data = await redis_db.hgetall(f"task:{task_id}")
-
-    # Проверяем, существует ли задача
-    if not task_data:
-        raise HTTPException(status_code=404, detail="Задача не найдена")
-
-    # Функция возвращает данные в удобном формате
-    return {key.decode("utf-8"): value.decode("utf-8") for key, value in task_data.items()}
-
-
-# Эндпойнт для сброса очереди LLM-задач
 @app.post("/reset-queue/", tags=['ai analytics'])
 async def reset_queue():
     try:
-        # Очищаем очередь задач
+        # Очищаем очередь задач из Redis
         await redis_db.delete("queue:tasks")
 
-        # Делаем все задачи, находящиеся в состоянии "in_progress", в состояние "pending"
-        task_ids = await redis_db.lrange("queue:tasks", 0, -1)
-        for task_id in task_ids:
-            await redis_db.hset(f"task:{task_id.decode()}", "status", "pending")
+        # Получаем все ID задач, находящихся в состоянии "in_progress"
+        in_progress_task_ids = await redis_db.keys("task:*")  # Находим все задачи
+        for task_id in in_progress_task_ids:
+            # Обновляем статус каждой задачи на "pending"
+            await redis_db.hset(task_id.decode(), "status", "pending")
 
+        # Сбрасываем счетчик активных задач
+        await redis_db.set("active_tasks_count", 0)
+
+        # Логируем действие об успешном сбросе
+        logger.info("Очередь LLM-задач успешно сброшена, счетчик активных задач обновлен на 0.")
+
+        # Возвращаем успешный ответ клиенту
         return JSONResponse(
             content={
                 "message": "Очередь LLM-задач сброшена."
@@ -2247,10 +2255,103 @@ async def reset_queue():
             status_code=200
         )
     except Exception as e:
-        logger.error(f"Error in reset_queue: {e}")
+        # Логируем ошибку и возвращаем ответ с кодом 500
+        logger.error(f"Ошибка при сбросе очереди LLM-задач: {e}")
         return JSONResponse(
             content={
-                "error": str(e)
+                "error": "Не удалось сбросить очередь LLM-задач. Пожалуйста, попробуйте снова позже."
+            },
+            status_code=500
+        )
+
+
+# @app.get("/status/{task_id}", tags=['ai analytics'])
+# async def get_task_status(task_id: str):
+#     # Ожидаем асинхронный вызов метода hgetall
+#     task_data = await redis_db.hgetall(f"task:{task_id}")
+
+#     print(f"task_data type: {type(task_data)}, content: {task_data}")
+
+#     # Проверяем, существует ли задача
+#     if not task_data:
+#         raise HTTPException(status_code=404, detail="Задача не найдена")
+
+#     # Декодируем ключи и значения
+#     decoded_task_data = {key.decode("utf-8"): value.decode("utf-8") for key, value in task_data.items()}
+
+#     # Убираем символы новой строки из значений
+#     cleaned_task_data = {k: v.replace("\n", "") for k, v in decoded_task_data.items()}
+
+#     return cleaned_task_data
+
+@app.get("/status/{task_id}", tags=['ai analytics'])
+async def get_task_status(task_id: str):
+    # Получаем данные задачи из Redis
+    task_data = await redis_db.hgetall(f"task:{task_id}")
+
+    print(f"task_data type: {type(task_data)}, content: {task_data}")
+
+    # Проверяем, существует ли задача
+    if not task_data:
+        raise HTTPException(status_code=404, detail="Задача не найдена")
+
+    # Декодируем ключи и значения
+    decoded_task_data = {key.decode("utf-8"): value.decode("utf-8") for key, value in task_data.items()}
+
+    # Расчищаем значения от символов новой строки
+    cleaned_task_data = {}
+    for k, v in decoded_task_data.items():
+        try:
+            # Проверяем, является ли значение строкой JSON
+            json_value = json.loads(v)
+            if isinstance(json_value, list):
+                # Убираем переносы строк из каждого элемента списка, если это список
+                cleaned_task_data[k] = [s.replace("\n", "") for s in json_value]
+            elif isinstance(json_value, str):
+                # Для строк просто убираем переносы
+                cleaned_task_data[k] = json_value.replace("\n", "")
+            else:
+                # Если это не строка и не список, просто сохраняем как есть
+                cleaned_task_data[k] = json_value
+        except json.JSONDecodeError:
+            # Если значение не является строкой JSON, просто убираем переносы из строки
+            cleaned_task_data[k] = v.replace("\n", "")
+
+    return cleaned_task_data
+
+
+# Настраиваем логгер
+logger = logging.getLogger("uvicorn.error")  # Используем логгер Uvicorn для ошибок
+
+@app.post("/reset-queue/", tags=['ai analytics'])
+async def reset_queue():
+    try:
+        # Очищаем очередь задач из Redis
+        await redis_db.delete("queue:tasks")
+        
+        # Получаем все текущие ID задач, находящихся в состоянии "in_progress"
+        in_progress_task_ids = await redis_db.lrange("queue:tasks", 0, -1)
+        
+        # Обновляем статус каждой задачи на "pending"
+        for task_id in in_progress_task_ids:
+            await redis_db.hset(f"task:{task_id.decode()}", "status", "pending")
+
+        # Логируем действие об успешном сбросе
+        logger.info("Очередь LLM-задач успешно сброшена.")
+
+        # Возвращаем успешный ответ клиенту
+        return JSONResponse(
+            content={
+                "message": "Очередь LLM-задач сброшена."
+            },
+            status_code=200
+        )
+    except Exception as e:
+        # Логируем ошибку и возвращаем ответ с кодом 500
+        logger.error(f"Ошибка при сбросе очереди LLM-задач: {e}")
+        return JSONResponse(
+            content={
+                "error": "Не удалось сбросить очередь LLM-задач. Пожалуйста, попробуйте снова позже."
             },
             status_code=500
         )
@@ -2327,8 +2428,12 @@ async def llm_analyze(user_id: int, folder_name: str, file_name: str):
     # print(info_html['min_date'])
     # print(info_html['max_date'])
 
-    data = elastic_query(theme_index=indexes[info_html['index_number']], query_str=info_html['query_str'], 
-                         min_date=info_html['min_data'], max_date=info_html['max_data'])
+    if 'min_data' not in info_html:
+        data = elastic_query(theme_index=indexes[info_html['index_number']], query_str=info_html['query_str'], 
+                            min_date=info_html['min_date'], max_date=info_html['max_date'])
+    else:
+        data = elastic_query(theme_index=indexes[info_html['index_number']], query_str=info_html['query_str'], 
+                             min_date=info_html['min_data'], max_date=info_html['max_data'])
     data = pd.DataFrame(data)
 
     # Обработка тематики
@@ -2350,6 +2455,15 @@ async def llm_analyze(user_id: int, folder_name: str, file_name: str):
     df_join.columns = ['Имя кластера', 'Время', 'Источник', 'Ссылка на автора', 'Автор', 'Ссылка на текст', 'Тип автора', 'Пол', 'Возраст',
                        'Тип источника', 'Комментариев', 'Аудитория', 'Репостов', 'Лайков', 'Вовлеченность', 'Просмотров',
                        'Аудитория СМИ', 'Тональность', 'Страна', 'Регион']
+    
+    # Добавление уникального идентификатора
+    df_join.reset_index(drop=True, inplace=True)  # Сбрасываем индекс, чтобы не было старых индексов
+    df_join.insert(0, 'id', df_join.index)  # Добавляем новый столбец в качестве идентификатора
+
+    df_join.columns = ['ID', 'Имя кластера', 'Время', 'Источник', 'Ссылка на автора', 'Автор', 'Ссылка на текст', 
+                    'Тип автора', 'Пол', 'Возраст', 'Тип источника', 'Комментариев', 'Аудитория', 
+                    'Репостов', 'Лайков', 'Вовлеченность', 'Просмотров', 'Аудитория СМИ', 'Тональность', 
+                    'Страна', 'Регион'] 
 
     df_join.drop('Аудитория СМИ', axis=1, inplace=True)
     df_join['Тональность'] = df_join['Тональность'].map({0: 'Нейтральная', -1: 'Негатив', 1: 'Позитив'})
@@ -2384,13 +2498,34 @@ async def llm_analyze(user_id: int, folder_name: str, file_name: str):
     # Находим файл, в имени которых содержится выбранный html
     file = [file for file in files if file_name.replace('.html', '') in file]
     file = file[0].replace('topic_model_', 'my_list_llm_ans_')
-
+    # file = file + '.pkl'
     # thematics_path = texts_path + '/' + 'my_list_llm_ans_' + file.replace('.html', '.pkl')
-    thematics_path = texts_path + '/' + 'my_list_llm_ans_' + file.replace('.html', '.pkl')
 
-    with open(thematics_path, 'rb') as f:
-        texts_thematics = pickle.load(f)
-    df_join.insert(1, 'Тематика текста', texts_thematics)
+    thematics_path = texts_path + '/' + 'my_list_llm_ans_' + file.replace('.html', '.pkl').replace('topic_names_', '')
+    print(thematics_path)
+
+    try:
+        with open(thematics_path.replace('_datamapplot', '').replace('my_list_llm_ans_my_list_llm_ans_', 'my_list_llm_ans_'), 'rb') as f:
+            texts_thematics = pickle.load(f)
+        df_join.insert(1, 'Тематика текста', texts_thematics)
+    except:
+        with open(thematics_path.replace('_datamapplot', '').replace('my_list_llm_ans_my_list_llm_ans_', 'my_list_llm_ans_') + '.pkl', 'rb') as f:
+            texts_thematics = pickle.load(f)
+        df_join.insert(1, 'Тематика текста', texts_thematics)
+
+    # except:
+    #     try:
+    #         thematics_path = texts_path + '/' + file.replace('.html', '.pkl').replace('topic_names_', '')
+    #         with open(thematics_path, 'rb') as f:
+    #             texts_thematics = pickle.load(f)
+    #         df_join.insert(1, 'Тематика текста', texts_thematics)
+    #     except:
+    #         print(111333)
+    #         print(file)
+    #         thematics_path = texts_path + '/' + file.replace('.html', '.pkl').replace('topic_names_', '').replace('.pkl.pkl', '.pkl')
+    #         with open(thematics_path, 'rb') as f:
+    #             texts_thematics = pickle.load(f)
+    #         df_join.insert(1, 'Тематика текста', texts_thematics)
 
     # Полный путь к выходному файлу
     output_path = os.path.join('/home/dev/fastapi/analytics_app/files/', 'df_join.xlsx')
@@ -2402,12 +2537,42 @@ async def llm_analyze(user_id: int, folder_name: str, file_name: str):
     await redis_db.hset(str(user_id), "full_data", json.dumps(df_join.where(pd.notnull(df_join), None).to_dict(orient='records')))
     await redis_db.hset(str(user_id), "aggregated_data", json.dumps(result.where(pd.notnull(result), None).to_dict(orient='records')))
 
+    # # Находим нужный HTML-файл
+    # html_files = user_data["bertopic_files_directory"].get(folder_name, [])
+    # html_file_path = None
+
+    # info_html = {}  # для использования далее в elasticsearch
+    # # Ищем файл по указанному имени
+    # for file_info in html_files:
+    #     if file_info["html-file"] == file_name:
+    #         info_html = file_info
+    #         html_file_path = os.path.join("/home/dev/fastapi/analytics_app/data", str(user_id), 
+    #                                        "bertopic_files_directory", folder_name, 'datamapplot_' + file_name)
+    #         break
+
+    # html_file_path = '/home/dev/fastapi/analytics_app/data/4/bertopic_files_directory/test/datamapplot_tehno_shuffle_25_20250219_222600.html'
+
     # Возвращение HTML файла и таблиц
     with open(html_file_path, 'r', encoding='utf-8') as file:
         html_content = file.read()
+
+    if html_file_path is None or not os.path.exists(html_file_path):
+        raise HTTPException(status_code=404, detail="HTML file not found")
+    
+    
+    html_file_path_dataplot = os.path.join("/home/dev/fastapi/analytics_app/data", str(user_id), 
+                                    "bertopic_files_directory", folder_name, 'datamapplot_' + file_name)
+    # Возвращение Datamaplot HTML файла
+    with open(html_file_path_dataplot, 'r', encoding='utf-8') as file:
+        html_file_dataplot = file.read()
+
+    if html_file_dataplot is None or not os.path.exists(html_file_path):
+        raise HTTPException(status_code=404, detail="HTML file not found")
+    
     
     return {
         "html_content": html_content,
+        "html_content_dataplot": html_file_dataplot,
         "full_data": df_join.where(pd.notnull(df_join), None).to_dict(orient='records'),  # Замена NaN на None
         "aggregated_data": result.where(pd.notnull(result), None).to_dict(orient='records')  # Замена NaN на None
     }
@@ -2432,8 +2597,6 @@ async def get_current_user(token: str = Depends(oauth2_scheme), db: AsyncSession
         headers={"WWW-Authenticate": "Bearer"},
     )
     payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
-    print(555) 
-    # print(payload)
 
     user_id: str = payload.get("sub")
     print(user_id)
@@ -2554,12 +2717,21 @@ async def add_file(user_id: str, folder_name: str, uploaded_file: UploadFile = F
     # Устанавливаем путь к директории файла
     file_location = f'/home/dev/fastapi/analytics_app/data/{user_id}/json_files_directory/{folder_name}/{uploaded_file.filename.lower()}'
 
-    max_file_size = 10 * 1024 * 1024 * 1024  # 10 GB
-    if uploaded_file.size > max_file_size:
-        raise HTTPException(
-            status_code=400,
-            detail="Размер файла превышает допустимый предел 10 ГБ"
-        )
+    max_file_size_admin = 10 * 1024 * 1024 * 1024  # 10 GB
+    max_file_size_non_admin = 100 * 1024 * 1024  # 100 MB
+
+    if user_id == '1':  # Проверка, является ли пользователь администратором
+        if uploaded_file.size > max_file_size_admin:
+            raise HTTPException(
+                status_code=400,
+                detail="Размер файла превышает допустимый предел 10 ГБ"
+            )
+    else:  # Если пользователь не администратор
+        if uploaded_file.size > max_file_size_non_admin:
+            raise HTTPException(
+                status_code=400,
+                detail="Размер файла превышает допустимый предел 100 МБ"
+            )
 
     os.makedirs(os.path.dirname(file_location), exist_ok=True)
 
@@ -3174,6 +3346,7 @@ async def llm_run_multiple(
 
 async def process_multiple_texts_task(task_id: str, task_data: dict):
     try:
+        print(f"task_data type: {type(task_data)}, content: {task_data}")
         # Получаем список текстов и вопрос для каждого текста
         texts = task_data['texts']
         prompt_question = task_data['prompt_question']
@@ -3185,14 +3358,24 @@ async def process_multiple_texts_task(task_id: str, task_data: dict):
             result = await generate_answer(text, prompt_question, system_prompt)
             results.append(result)
 
-        # Сериализуем результаты в JSON перед сохранением в Redis
-        json_results = json.dumps(results)
-        
-        # Сохраняем результаты обработки LLM в Redis
-        await redis_db.hset(f"task:{task_id}", "result", json_results)
+        # # Сериализуем результаты в JSON перед сохранением в Redis
+        # json_results = json.dumps(results)
 
-        # Обновляем статус задачи как завершенную
-        await redis_db.hset(f"task:{task_id}", "status", "done")
+        json_results = json.dumps(results, ensure_ascii=False)
+        json_texts = json.dumps(texts, ensure_ascii=False)
+
+
+        # Сохраняем результаты обработки LLM в Redis
+        task_key = f"task:{task_id}"
+        await redis_db.hset(task_key, mapping={
+            'texts': json_texts,
+            'results': json_results, 
+            "status": "done"
+        })
+
+        # # Обновляем статус задачи как завершенную
+        # await redis_db.hset(f"task:{task_id}", "status", "done")
+    
     except Exception as e:
         logging.error(f"Error processing task {task_id}: {str(e)}", exc_info=True)
         await redis_db.hset(f"task:{task_id}", "status", f"failed: {str(e)}")
@@ -3201,7 +3384,8 @@ async def process_multiple_texts_task(task_id: str, task_data: dict):
 async def generate_answer(text: str, prompt_question: str, system_prompt: Optional[str]):
     url = "http://localhost:11434/api/generate"
     payload = {
-        "model": "erwan2/DeepSeek-R1-Distill-Qwen-14B",
+        # "model": "erwan2/DeepSeek-R1-Distill-Qwen-14B",
+        "model": "Vikhr_Q3",
         "prompt": f"{system_prompt}\n\n{text}\n\n{prompt_question}" if system_prompt else f"{text}\n\n{prompt_question}",
         "stream": False
     }
@@ -3211,7 +3395,7 @@ async def generate_answer(text: str, prompt_question: str, system_prompt: Option
                 response_json = await response.json()
                 result = response_json.get("response", "")
                 logging.info(f"LLM response: {result}")
-                result = result.split('</think>')[1].replace('\n\n', '').replace('\n', '')
+                # result = result.split('</think>')[1].replace('\n\n', '').replace('\n', '') # DeepSeek-R1-Distill-Qwen-14B
                 return result
             else:
                 logging.error(f"Error calling LLM API: {response.status}")
@@ -3476,106 +3660,512 @@ from ollama import AsyncClient
 # Создаём клиент один раз
 client = AsyncClient(host='http://localhost:11434')
 
-@app.post("/rag", tags=['ai analytics'])
-async def rag_query(request: QueryRequest, session: AsyncSession = Depends(get_db)):
-    try:
-        user_query = request.query
-        user_id = request.user_id
-        filename = request.filename
-        folder_name = request.folder_name
-        num_results = request.num_results
-        generate_answer = request.generate_answer
+# @app.post("/rag", tags=['ai analytics'])
+# async def rag_query(request: QueryRequest, session: AsyncSession = Depends(get_db)):
+#     try:
+#         user_query = request.query
+#         user_id = request.user_id
+#         filename = request.filename
+#         folder_name = request.folder_name
+#         num_results = request.num_results
+#         generate_answer = request.generate_answer
 
-        # Получение информации из Redis
-        user_data = await redis_db.hgetall(user_id)
-        user_data = {key.decode('utf-8'): value.decode('utf-8') for key, value in user_data.items()}
-        # Декодируем JSON-значения в словари
-        for key, value in user_data.items():
-            try:
-                user_data[key] = json.loads(value)
-            except json.JSONDecodeError:
-                print(f"Ошибка декодирования JSON для ключа {key}: {value}")
+#         # Получение информации из Redis
+#         user_data = await redis_db.hgetall(user_id)
+#         user_data = {key.decode('utf-8'): value.decode('utf-8') for key, value in user_data.items()}
+#         # Декодируем JSON-значения в словари
+#         for key, value in user_data.items():
+#             try:
+#                 user_data[key] = json.loads(value)
+#             except json.JSONDecodeError:
+#                 print(f"Ошибка декодирования JSON для ключа {key}: {value}")
 
-        def extract_relevant_part(filename):
-            # Разделяем строку на части по символу '_'
-            parts = filename.split('_')
-            # Объединяем все части до последнего подчеркивания
-            relevant_part = '_'.join(parts[:-2])  # исключаем последние две части
-            return relevant_part
+#         def extract_relevant_part(filename):
+#             # Разделяем строку на части по символу '_'
+#             parts = filename.split('_')
+#             # Объединяем все части до последнего подчеркивания
+#             relevant_part = '_'.join(parts[:-2])  # исключаем последние две части
+#             return relevant_part
         
-        # Поиск нужной информации в bertopic_files_directory
-        theme_index = None
-        min_date = None
-        max_date = None
-        query_str = None
-        for item in user_data["bertopic_files_directory"][folder_name]:
-            if item["html-file"] == filename:
-                theme_index = extract_relevant_part(filename)
-                min_date = item["min_date"]
-                max_date = item["max_date"]
-                query_str = item["query_str"]
-                break
+#         # Поиск нужной информации в bertopic_files_directory
+#         theme_index = None
+#         min_date = None
+#         max_date = None
+#         query_str = None
+#         for item in user_data["bertopic_files_directory"][folder_name]:
+#             print(111555)
+#             if item["html-file"] == filename:
+#                 print(item)
+#                 theme_index = extract_relevant_part(filename)
+#                 print(555999777)
+#                 print(theme_index)
+#                 if "min_date" in item:
+#                     min_date = item["min_date"]
+#                     max_date = item["max_date"]
+#                 else:
+#                     min_date = item["min_data"]
+#                     max_date = item["max_data"]
+#                 query_str = item["query_str"]
+#                 break
         
-        if theme_index is None:
-            raise HTTPException(status_code=404, detail="Файл не найден")
+#         if theme_index is None:
+#             raise HTTPException(status_code=404, detail="Файл не найден")
         
-        # Получение текстов из Elasticsearch
-        data = elastic_query(theme_index=theme_index, min_date=min_date, max_date=max_date, query_str=query_str)
-        texts = [x['text'] for x in data]
+#         # Получение текстов из Elasticsearch
+#         data = elastic_query(theme_index=theme_index, min_date=min_date, max_date=max_date, query_str=query_str)
+#         texts = [x['text'] for x in data]
 
-        # Создание эмбеддинга для запроса пользователя
-        query_embedding = embedding_model.encode(user_query, show_progress_bar=False)
+#         # Создание эмбеддинга для запроса пользователя
+#         query_embedding = embedding_model.encode(user_query, show_progress_bar=False)
 
-        # Извлечение эмбеддингов из базы данных с учетом user_id, filename и folder_name
-        query = select(Embedding).where(
-            Embedding.user_id == user_id,
-            Embedding.filename == filename,
-            Embedding.folder_name == folder_name
-        )
-        result = await session.execute(query)
-        embeddings = result.scalars().all()
+#         # Извлечение эмбеддингов из базы данных с учетом user_id, filename и folder_name
+#         query = select(Embedding).where(
+#             Embedding.user_id == user_id,
+#             Embedding.filename == filename,
+#             Embedding.folder_name == folder_name
+#         )
+#         result = await session.execute(query)
+#         embeddings = result.scalars().all()
 
-        if not embeddings:
-            raise HTTPException(status_code=404, detail="Эмбеддинги не найдены")
+#         if not embeddings:
+#             raise HTTPException(status_code=404, detail="Эмбеддинги не найдены")
         
-        # Расчет косинусного сходства между запросом и эмбеддингами
-        query_embedding = list(query_embedding)  # Преобразование в одномерный список
-        user_embeddings = [emb.vectors for emb in embeddings][0]  # Преобразование каждого вектора в одномерный список
+#         # Расчет косинусного сходства между запросом и эмбеддингами
+#         query_embedding = list(query_embedding)  # Преобразование в одномерный список
+#         user_embeddings = [emb.vectors for emb in embeddings][0]  # Преобразование каждого вектора в одномерный список
 
-        print(555999777)
-        print(f'len_user_embeddings: {len(user_embeddings)}')
+#         print(f'len_user_embeddings: {len(user_embeddings)}')
 
-        # similarities = cosine_similarity([query_embedding], user_embeddings)[0]
+#         # similarities = cosine_similarity([query_embedding], user_embeddings)[0]
 
-        query_embedding_reshaped = np.array(query_embedding).reshape(1, -1)  # Преобразование в двумерный массив для одного запроса
-        user_embeddings_reshaped = np.array(user_embeddings)  # Двумерный массив эмбеддингов пользователей
+#         query_embedding_reshaped = np.array(query_embedding).reshape(1, -1)  # Преобразование в двумерный массив для одного запроса
+#         user_embeddings_reshaped = np.array(user_embeddings)  # Двумерный массив эмбеддингов пользователей
 
-        similarities = cosine_similarity(query_embedding_reshaped, user_embeddings_reshaped)[0]
-        # print(similarities)
+#         similarities = cosine_similarity(query_embedding_reshaped, user_embeddings_reshaped)[0]
+#         # print(similarities)
 
-        # Получение индексов наиболее релевантных эмбеддингов
-        # top_indices = similarities.argsort()[-num_results:][::-1]
-        top_indices = np.argpartition(similarities, -num_results)[-num_results:]
-        print(top_indices)
-        # print(similarities.argsort())
-        # print(f'top_indices: {top_indices}')
+#         # Получение индексов наиболее релевантных эмбеддингов
+#         # top_indices = similarities.argsort()[-num_results:][::-1]
+#         top_indices = np.argpartition(similarities, -num_results)[-num_results:]
+#         print(top_indices)
+#         # print(similarities.argsort())
+#         # print(f'top_indices: {top_indices}')
 
-        # Получение наиболее релевантных текстов
-        top_texts = [texts[i] for i in top_indices]
-        print(777)
-        # print(top_texts)
+#         # Получение наиболее релевантных текстов
+#         top_texts = [texts[i] for i in top_indices]
+#         # print(top_texts)
 
-        if generate_answer:
-            # Генерация ответа с использованием модели генерации текста
-            prompt = f"Query: {user_query}\nContext: {' '.join([texts[i] for i in top_indices])}\nAnswer:"  # Здесь берем тексты по индексам
-            answer = await generate_answers(client=client, prompt=prompt)
+#         if generate_answer:
+#             # Генерация ответа с использованием модели генерации текста
+#             prompt = f"Query: {user_query}\nContext: {' '.join([texts[i] for i in top_indices])}\nAnswer:"  # Здесь берем тексты по индексам
+#             answer = await generate_answers(client=client, prompt=prompt)
             
-            return {"answer": answer, "top_texts": top_texts}
-        else:
-            return {"top_texts": top_texts}
+#             return {"answer": answer, "top_texts": top_texts}
+#         else:
+#             return {"top_texts": top_texts}
 
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+#     except Exception as e:
+#         raise HTTPException(status_code=500, detail=str(e))
+
+
+from fastapi import APIRouter, HTTPException, Query
+
+@app.get("/llm-analyze-excel", tags=['files'])
+async def llm_analyze_excel(user_id: int, folder_name: str, file_name: str, all_table: bool = Query(True)):
+    global full_data_store, aggregated_data_store
+
+    user_data = await redis_db.hgetall(str(user_id))  # Получаем данные пользователя из Redis
+
+    user_data = {key.decode('utf-8'): value.decode('utf-8') for key, value in user_data.items()}
+    # Декодируем JSON-значения в словари
+    for key, value in user_data.items():
+        try:
+            user_data[key] = json.loads(value)
+        except json.JSONDecodeError:
+            print(f"Ошибка декодирования JSON для ключа {key}: {value}")
+
+    if user_data is None:
+        raise HTTPException(status_code=404, detail="User not found")
+
+    # Находим нужный HTML-файл
+    html_files = user_data["bertopic_files_directory"].get(folder_name, [])
+    html_file_path = None
+
+    info_html = {}  # для использования далее в elasticsearch
+    for file_info in html_files:
+        if file_info["html-file"] == file_name:
+            info_html = file_info
+            html_file_path = os.path.join("/home/dev/fastapi/analytics_app/data", str(user_id), 
+                                           "bertopic_files_directory", folder_name, file_name)
+            break
+
+    if html_file_path is None or not os.path.exists(html_file_path):
+        raise HTTPException(status_code=404, detail="HTML file not found")
+
+    # Определяем базовое имя модели без расширения
+    model_file_name_base = file_name.replace('.html', '').split('_')[-1]
+
+    # Теперь ищем нужный модельный файл
+    model_folder_name = None
+    for file_info in html_files:
+        if model_file_name_base in file_info["model-file"]:
+            model_folder_name = folder_name
+            break
+
+    if model_folder_name is None:
+        raise HTTPException(status_code=404, detail="Model folder not found")
+
+    # Создаем путь к модели
+    model_path = os.path.join("/home/dev/fastapi/analytics_app/data", str(user_id), 
+                               "bertopic_files_directory", model_folder_name, 
+                               next(file_info["model-file"] for file_info in html_files if model_file_name_base in file_info["model-file"]))
+
+    # Проверяем, существует ли путь к модели
+    if not os.path.exists(model_path):
+        raise HTTPException(status_code=404, detail="Model file not found")
+
+    # Модель BERTopic
+    topic_model = BERTopic.load(model_path)
+
+    # Поиск в elastic за те же даты и строку поиска
+    file_path = '/home/dev/fastapi/analytics_app/data/indexes.pkl'
+    indexes = load_dict_from_pickle(file_path)
+    
+    if info_html['query_str'] is None:
+        info_html['query_str'] = 'all'
+
+    if 'min_data' not in info_html:
+        data = elastic_query(theme_index=indexes[info_html['index_number']], query_str=info_html['query_str'], 
+                             min_date=info_html['min_date'], max_date=info_html['max_date'])
+    else:
+        data = elastic_query(theme_index=indexes[info_html['index_number']], query_str=info_html['query_str'], 
+                             min_date=info_html['min_data'], max_date=info_html['max_data'])
+    data = pd.DataFrame(data)
+
+    # Обработка тематики
+    df_topic = topic_model.get_topic_info()[['CustomName', 'Topic']]
+    dct_df_topic = dict(zip(df_topic['Topic'], df_topic['CustomName']))
+    thematics = [dct_df_topic[x] for x in topic_model.topics_] 
+
+    data.rename(columns={'url': 'text_url'}, inplace=True)
+    data = data.join(pd.DataFrame(list(data['authorObject'].values)))
+    data.rename(columns={'url': 'author_url'}, inplace=True)
+    data = data[['timeCreate', 'hub', 'author_url', 'fullname', 'text_url', 'author_type', 'sex', 'age',
+                   'hubtype', 'commentsCount', 'audienceCount',
+                   'repostsCount', 'likesCount', 'er', 'viewsCount',
+                   'massMediaAudience', 'toneMark', 'country', 'region']]
+
+    df_join = pd.DataFrame(thematics).join(data, how='inner', lsuffix='_df1', rsuffix='_df2')
+    df_join.columns = ['Имя кластера', 'Время', 'Источник', 'Ссылка на автора', 'Автор', 'Ссылка на текст', 
+                       'Тип автора', 'Пол', 'Возраст', 'Тип источника', 'Комментариев', 'Аудитория', 
+                       'Репостов', 'Лайков', 'Вовлеченность', 'Просмотров',
+                       'Аудитория СМИ', 'Тональность', 'Страна', 'Регион']
+    
+    df_join.reset_index(drop=True, inplace=True)  
+    df_join.insert(0, 'id', df_join.index)  
+    
+    df_join.columns = ['ID', 'Имя кластера', 'Время', 'Источник', 'Ссылка на автора', 'Автор', 'Ссылка на текст', 
+                       'Тип автора', 'Пол', 'Возраст', 'Тип источника', 'Комментариев', 'Аудитория', 
+                       'Репостов', 'Лайков', 'Вовлеченность', 'Просмотров', 'Аудитория СМИ', 'Тональность', 
+                       'Страна', 'Регион'] 
+
+    df_join.drop('Аудитория СМИ', axis=1, inplace=True)
+    df_join['Тональность'] = df_join['Тональность'].map({0: 'Нейтральная', -1: 'Негатив', 1: 'Позитив'})
+
+    df_group = df_join[['Имя кластера', 'Комментариев', 'Аудитория', 'Репостов', 'Лайков', 'Вовлеченность', 'Просмотров']].copy()
+    
+    numerical_columns = ['Комментариев', 'Аудитория', 'Репостов', 'Лайков', 'Вовлеченность', 'Просмотров']
+    
+    for column in numerical_columns:
+        df_group[column] = pd.to_numeric(df_group[column], errors='coerce')
+        df_group[column] = df_group[column].fillna(0).astype(int)
+
+    result = df_group.groupby('Имя кластера').sum().reset_index()
+
+    theme_count = result['Имя кластера'].value_counts()
+    result['Количество'] = result['Имя кластера'].map(theme_count)
+    result.sort_values(by='Количество', ascending=False, inplace=True)
+    result = result[['Имя кластера', 'Количество', 'Аудитория', 'Комментариев', 'Репостов', 'Лайков', 'Вовлеченность', 'Просмотров']]
+
+    result = result.where(pd.notnull(result), None)
+
+    texts_path = os.path.join("/home/dev/fastapi/analytics_app/data", str(user_id), 
+                                "bertopic_files_directory", model_folder_name)
+    files = os.listdir(texts_path)
+
+    file = [file for file in files if file_name.replace('.html', '') in file][0]
+    thematics_path = texts_path + '/' + 'my_list_llm_ans_' + file.replace('.html', '.pkl').replace('topic_names_', '')
+    
+    with open(thematics_path.replace('_datamapplot', ''), 'rb') as f:
+        texts_thematics = pickle.load(f)
+    df_join.insert(1, 'Тематика текста', texts_thematics)
+
+    output_path = os.path.join('/home/dev/fastapi/analytics_app/files/', (file_name.capitalize() + 'aggregated_table.xlsx').replace('.html', '_') 
+                               if not all_table else (file_name.capitalize() + 'all_table.xlsx').replace('.html', '_'))
+
+    # В зависимости от параметра all_table сохраняем соответствующую таблицу
+    if all_table:
+        # Удаление столбца 'ID'
+        if 'ID' in df_join.columns:
+            df_join = df_join.drop(columns=['ID'])
+        df_join.to_excel(output_path, index=False)
+    else:
+        # Удаление столбца 'ID'
+        if 'ID' in result.columns:
+            result = result.drop(columns=['ID'])
+        result.to_excel(output_path, index=False)
+
+    # Возврат файла
+    return FileResponse(output_path, media_type='application/octet-stream', filename=os.path.basename(output_path))
+
+
+
+
+class TextInput(BaseModel):
+    texts: List[str]
+
+# @app.post("/text-clusters-similarity/", tags=['ai analytics'])
+# async def get_text_clusters(
+#     user_id: int,
+#     folder_name: str,
+#     file_name: str,
+#     text_input: TextInput,  # Изменяем параметр на text_input
+#     session: AsyncSession = Depends(get_db),
+#     threshold: float = 0.8):
+
+#     # Получаем эмбеддинги из базы данных
+#     embedding = await get_embedding(session, user_id, file_name)
+#     if embedding is None:
+#         raise HTTPException(status_code=404, detail="Embeddings not found for the specified user and file.")
+    
+#     if user_id < 0:
+#         raise HTTPException(status_code=400, detail="Invalid user ID.")
+        
+#     vectors = embedding.vectors
+#     if not vectors:
+#         raise HTTPException(status_code=404, detail="No vectors found in embedding.")
+        
+#     print(len(vectors))
+#     gc.collect()
+#     torch.cuda.empty_cache()
+
+#     # Инициализируем модель эмбеддингов
+#     embedding_model = SentenceTransformer("/home/dev/fastapi/analytics_app/data/embed_files/DeepPavlov/rubert-base-cased-sentence")
+
+#     # Получаем эмбеддинги для текстов
+#     embedding_texts = embedding_model.encode(text_input.texts)  # Изменяем на text_input.texts
+
+#     # Итоговый словарь для хранения результатов
+#     results = {text: [] for text in text_input.texts}  # Инициализируем результат по каждому тексту
+#     other_indices = []  # Список для индексов, которые не соответствуют ни одному тексту
+
+#     # Сравнение текстовых эмбеддингов с векторами
+#     for text_idx, text_vector in enumerate(embedding_texts):
+#         text_vector = np.array(text_vector)  # Приводим текстовый вектор к numpy массиву
+#         has_match = False  # Переменная для отслеживания наличия совпадений
+
+#         for idx, vector in enumerate(vectors):
+#             vector = np.array(vector)  # Приводим вектор к numpy массиву
+#             # Вычисляем косинусное сходство
+#             cosine_similarity = np.dot(text_vector, vector) / (np.linalg.norm(text_vector) * np.linalg.norm(vector))
+#             print(cosine_similarity)
+#             # Проверяем, превышает ли сходство указанный порог
+#             if cosine_similarity >= threshold:
+#                 results[text_input.texts[text_idx]].append(idx)  # Добавляем индекс к соответствующему тексту
+#                 has_match = True  # Найдено совпадение
+
+#         # Если совпадений не найдено, добавляем индекс в 'other'
+#         if not has_match:
+#             other_indices.append(text_idx)
+
+#     # Добавляем индексы, которые ни с чем не совпадают, в специальный ключ 'other'
+#     results['other'] = other_indices
+
+#     # Возвращаем итоговый словарь результатов
+#     return json.dumps(results, ensure_ascii=False)
+
+
+from sklearn.metrics.pairwise import cosine_distances
+
+# @app.post("/text-clusters-files/", tags=['ai analytics'])
+# async def get_text_clusters(
+#     user_id: int,
+#     folder_name: str,
+#     file_name: str,
+#     text_input: TextInput,  # Изменяем параметр на text_input
+#     session: AsyncSession = Depends(get_db),
+#     threshold: float = 0.8):
+
+#     # Получаем эмбеддинги из базы данных
+#     embedding = await get_embedding(session, user_id, file_name)
+#     if embedding is None:
+#         raise HTTPException(status_code=404, detail="Embeddings not found for the specified user and file.")
+    
+#     if user_id < 0:
+#         raise HTTPException(status_code=400, detail="Invalid user ID.")
+        
+#     text_embeddings = embedding.vectors
+#     if not text_embeddings:
+#         raise HTTPException(status_code=404, detail="No vectors found in embedding.")
+        
+#     print(len(text_embeddings))
+
+#     gc.collect()
+#     torch.cuda.empty_cache()
+
+#     # texts = df[1].values[:100]
+#     # print(texts[:3])
+#     themes_texts = text_input.texts
+#     # print(themes_texts[:3])
+
+#     # Инициализируем модель эмбеддингов
+#     embedding_model = SentenceTransformer("/home/dev/fastapi/analytics_app/data/embed_files/DeepPavlov/rubert-base-cased-sentence")
+
+#     # Получаем эмбеддинги для текстов themes_texts
+#     embedding_themes = embedding_model.encode(themes_texts, show_progress_bar=False)
+#     print(f'len(embedding_themes): {len(embedding_themes)}')
+
+#     # Максимальная длина токенов
+#     max_length = 512
+
+#     # Функция для нахождения близких эмбеддингов
+#     def find_similar_embeddings(theme_embedding, text_embeddings):
+
+#         # Вычисляем косинусные расстояния между theme_embedding и text_embeddings
+#         distances = cosine_distances([theme_embedding], text_embeddings).flatten()
+        
+#         # Находим индексы эмбеддингов, которые близки к theme_embedding
+#         similar_idx = np.where((1-distances) > threshold)[0]
+        
+#         return similar_idx
+
+#     result = {}
+#     for i in range(len(embedding_themes)):
+
+#         indexes = find_similar_embeddings(embedding_themes[i], text_embeddings)
+#         print(indexes)
+#         print("+++!!!+++")
+#         result[themes_texts[i]] = [str(j) for j in indexes]
+
+#     # Возвращаем итоговый словарь результатов в формате JSON
+#     return json.dumps(result, ensure_ascii=False)
+
+
+### запрос на поиск близости для нескольких текстов
+@app.post("/text-clusters-embed/", tags=['ai analytics'])
+async def get_text_clusters(
+    user_id: int,
+    folder_name: str,
+    file_name: str,
+    text_input: TextInput,  # Изменяем параметр на text_input
+    session: AsyncSession = Depends(get_db),
+    threshold: float = 0.8):
+
+    # Получаем эмбеддинги из базы данных
+    embedding = await get_embedding(session, user_id, file_name)
+    if embedding is None:
+        raise HTTPException(status_code=404, detail="Embeddings not found for the specified user and file.")
+    
+    file_path = '/home/dev/fastapi/analytics_app/data/indexes.pkl'
+    indexes = load_dict_from_pickle(file_path)
+
+    def remove_timestamp_from_filename(filename):
+        """
+        Очищает название файла, удаляя дату, время и расширение.
+        
+        Args:
+            filename (str): Название файла.
+            
+        Returns:
+            str: Очищенное название файла.
+        """
+        pattern = r'_\d{8}_\d{6}\.html$'
+        return re.sub(pattern, '', filename)
+    
+    user_data = await redis_db.hgetall(str(user_id))  # Получаем данные пользователя из Redis
+    user_data = {key.decode('utf-8'): value.decode('utf-8') for key, value in user_data.items()}
+    # Декодируем JSON-значения в словари
+    for key, value in user_data.items():
+        try:
+            user_data[key] = json.loads(value)
+        except json.JSONDecodeError:
+            print(f"Ошибка декодирования JSON для ключа {key}: {value}")
+
+    if user_data is None:
+        raise HTTPException(status_code=404, detail="User not found")
+    
+    # Находим нужный HTML-файл
+    html_files = user_data["bertopic_files_directory"].get(folder_name, [])
+    html_file_path = None
+
+    info_html = {}  # для использования далее в elasticsearch
+    # Ищем файл по указанному имени
+    for file_info in html_files:
+        if file_info["html-file"] == file_name:
+            info_html = file_info
+            html_file_path = os.path.join("/home/dev/fastapi/analytics_app/data", str(user_id), 
+                                           "bertopic_files_directory", folder_name, file_name)
+            break
+
+    if html_file_path is None or not os.path.exists(html_file_path):
+        raise HTTPException(status_code=404, detail="HTML file not found")
+
+    index_name = remove_timestamp_from_filename(file_name)
+    data = elastic_query(theme_index=index_name, min_date=info_html['min_data'], max_date=info_html['max_data'], 
+                         query_str=info_html['query_str'])
+    
+    theme_texts = [x['text'] for x in data]
+    
+    if user_id < 0:
+        raise HTTPException(status_code=400, detail="Invalid user ID.")
+        
+    text_embeddings = embedding.vectors
+    if not text_embeddings:
+        raise HTTPException(status_code=404, detail="No vectors found in embedding.")
+        
+    print(len(text_embeddings))
+
+    gc.collect()
+    torch.cuda.empty_cache()
+
+    themes_texts = text_input.texts
+
+    # Инициализируем модель эмбеддингов
+    embedding_model = SentenceTransformer("/home/dev/fastapi/analytics_app/data/embed_files/DeepPavlov/rubert-base-cased-sentence")
+
+    # Получаем эмбеддинги для текстов themes_texts
+    embedding_themes = embedding_model.encode(themes_texts, show_progress_bar=False)
+    print(f'len(embedding_themes): {len(embedding_themes)}')
+
+    # Максимальная длина токенов
+    max_length = 512
+
+    # Функция для нахождения близких эмбеддингов
+    def find_similar_embeddings(theme_embeddings, text_embeddings):
+        similar_indexes = []
+        for theme_embedding in theme_embeddings:
+            # Вычисляем косинусные расстояния между theme_embedding и text_embeddings
+            distances = cosine_distances([theme_embedding], text_embeddings).flatten()
+            print(distances)
+            
+            # Находим индексы эмбеддингов, которые близки к theme_embedding
+            similar_idx = np.where((1-distances) > threshold)[0]
+            similar_indexes.extend(similar_idx)
+        
+        return similar_indexes
+
+    result = {}
+    similar_indexes = find_similar_embeddings(embedding_themes, text_embeddings)
+    result["theme"] = [theme_texts[int(j)] for j in similar_indexes]
+
+    print(len(result["theme"]))
+    print(777)
+    print(similar_indexes)
+    # print(theme_texts[int(result["theme"][0])])
+    # print([x for x in theme_texts if 'Здравствуйте! Забрали обратную связь. Спасибо большое за отзыв!' in x])
+    # Возвращаем итоговый словарь результатов в формате JSON
+    return json.dumps(result, ensure_ascii=False)
+
 
 
 if __name__ == "__main__":

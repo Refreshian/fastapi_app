@@ -5,7 +5,7 @@ import time
 import pickle
 import asyncio
 import gc
-import json 
+import json
 import traceback
 import aiohttp
 import torch
@@ -32,6 +32,9 @@ from config import DB_HOST, DB_NAME, DB_PASS, DB_PORT, DB_USER
 
 import numpy as np
 import redis.asyncio as redis
+from ollama import AsyncClient
+from collections import OrderedDict
+from typing import List, Dict
 # Инициализация клиента Redis
 redis_db = redis.Redis(host='localhost', port=6379, db=0)
 
@@ -141,11 +144,7 @@ async def generate_answers(client, prompt):
             else:
                 print(f"Ошибка при запросе к Ollama: {response.status}")
                 return None
-
-from ollama import AsyncClient
-from collections import OrderedDict
-from typing import List, Dict
-
+            
 def clean_texts(texts):
     cleaned_texts = []
     
@@ -160,9 +159,131 @@ def clean_texts(texts):
     
     return cleaned_texts
 
+from typing import List, Union
+import plotly.graph_objects as go
+from sklearn.preprocessing import normalize
+
+def visualize_topics_over_time(topic_model,
+                               topics_over_time: pd.DataFrame,
+                               top_n_topics: int = None,
+                               topics: List[int] = None,
+                               normalize_frequency: bool = False,
+                               custom_labels: Union[bool, str] = False,
+                               title: str = "<b>Topics over Time</b>",
+                               width: int = 1250,
+                               height: int = 450) -> go.Figure:
+    """ Visualize topics over time
+
+    Arguments:
+        topic_model: A fitted BERTopic instance.
+        topics_over_time: The topics you would like to be visualized with the
+                          corresponding topic representation
+        top_n_topics: To visualize the most frequent topics instead of all
+        topics: Select which topics you would like to be visualized
+        normalize_frequency: Whether to normalize each topic's frequency individually
+        custom_labels: If bool, whether to use custom topic labels that were defined using 
+                       `topic_model.set_topic_labels`.
+                       If `str`, it uses labels from other aspects, e.g., "Aspect1".
+        title: Title of the plot.
+        width: The width of the figure.
+        height: The height of the figure.
+
+    Returns:
+        A plotly.graph_objects.Figure including all traces
+
+    Examples:
+
+    To visualize the topics over time, simply run:
+
+    ```python
+    topics_over_time = topic_model.topics_over_time(docs, timestamps)
+    topic_model.visualize_topics_over_time(topics_over_time)
+    ```
+
+    Or if you want to save the resulting figure:
+
+    ```python
+    fig = topic_model.visualize_topics_over_time(topics_over_time)
+    fig.write_html("path/to/file.html")
+    ```
+    <iframe src="../../getting_started/visualization/trump.html"
+    style="width:1000px; height: 680px; border: 0px;""></iframe>
+    """
+    colors = ["#E69F00", "#56B4E9", "#009E73", "#F0E442", "#D55E00", "#0072B2", "#CC79A7"]
+
+    # Select topics based on top_n and topics args
+    freq_df = topic_model.get_topic_freq()
+    freq_df = freq_df.loc[freq_df.Topic != -1, :]
+    if topics is not None:
+        selected_topics = list(topics)
+    elif top_n_topics is not None:
+        selected_topics = sorted(freq_df.Topic.to_list()[:top_n_topics])
+    else:
+        selected_topics = sorted(freq_df.Topic.to_list())
+
+    # Prepare data
+    if isinstance(custom_labels, str):
+        topic_names = [[[str(topic), None]] + topic_model.topic_aspects_[custom_labels][topic] for topic in topics]
+        topic_names = ["_".join([label[0] for label in labels[:4]]) for labels in topic_names]
+        topic_names = [label if len(label) < 30 else label[:27] + "..." for label in topic_names]
+        topic_names = {key: topic_names[index] for index, key in enumerate(topic_model.topic_labels_.keys())}
+    elif topic_model.custom_labels_ is not None and custom_labels:
+        topic_names = {key: topic_model.custom_labels_[key + topic_model._outliers] for key, _ in topic_model.topic_labels_.items()}
+    else:
+        topic_names = {key: value[:40] + "..." if len(value) > 40 else value
+                       for key, value in topic_model.topic_labels_.items()}
+    topics_over_time["Name"] = topics_over_time.Topic.map(topic_names)
+    data = topics_over_time.loc[topics_over_time.Topic.isin(selected_topics), :].sort_values(["Topic", "Timestamp"])
+
+    # Add traces
+    fig = go.Figure()
+    for index, topic in enumerate(data.Topic.unique()):
+        trace_data = data.loc[data.Topic == topic, :]
+        topic_name = trace_data.Name.values[0]
+        words = trace_data.Words.values
+        if normalize_frequency:
+            y = normalize(trace_data.Frequency.values.reshape(1, -1))[0]
+        else:
+            y = trace_data.Frequency
+        fig.add_trace(go.Scatter(x=trace_data.Timestamp, y=y,
+                                 mode='lines',
+                                 marker_color=colors[index % 7],
+                                 hoverinfo="text",
+                                 name=topic_name,
+                                 hovertext=[f'<b>Topic {topic}</b><br>Words: {word}' for word in words]))
+
+    # Styling of the visualization
+    fig.update_xaxes(showgrid=True)
+    fig.update_yaxes(showgrid=True)
+    fig.update_layout(
+        yaxis_title="Количество", # if normalize_frequency else "Frequency",
+        title={
+            'text': f"{title}",
+            'y': .95,
+            'x': 0.40,
+            'xanchor': 'center',
+            'yanchor': 'top',
+            'font': dict(
+                size=22,
+                color="Black")
+        },
+        # template="simple_white",
+        # width=width,
+        # height=height,
+        # hoverlabel=dict(
+        #     bgcolor="white",
+        #     font_size=16,
+        #     font_family="Rockwell"
+        # ),
+        # legend=dict(
+        #     title="<b>Global Topic Representation",
+        # )
+    )
+    return fig
+
+
 async def run_llm_query(task_data: dict):
 
-    print(task_data)
     """Обрабатывает LLM-запрос с обновлением статуса задачи в Redis, с периодическим сохранением результатов."""
     current_time = datetime.now().strftime('%Y%m%d_%H%M%S')
     try:
@@ -191,15 +312,16 @@ async def run_llm_query(task_data: dict):
                 max_date=max_data
             )
 
-        maxdata = 100
+        maxdata = 500000
         # Получаем тексты и ограничиваем их количество
         texts = [x['text'] for x in data]
         texts = texts[:maxdata]  # Ограничение – можно изменить срез
         total_texts = len(texts)
+        urls = [x['url'] if 'url' in x else '' for x in data][:maxdata]
         print(f'Текстов для анализа: {total_texts}')
-
+ 
         await redis_db.hset(f"task:{task_data['task_id']}", mapping={
-            "total_texts": str(total_texts),
+            "total_texts": str(total_texts), 
         })
 
         # Шаг 1: Дедупликация текстов
@@ -215,7 +337,7 @@ async def run_llm_query(task_data: dict):
 
         # Создаём клиент один раз
         client = AsyncClient(host='http://localhost:11434')
-        semaphore = asyncio.Semaphore(10)  # Ограничение одновременных запросов
+        semaphore = asyncio.Semaphore(5)  # Ограничение одновременных запросов
         et = time.time()
 
         # Путь для сохранения файла (используем абсолютный путь, избегая изменения CWD)
@@ -255,14 +377,19 @@ async def run_llm_query(task_data: dict):
                 }
                 try:
                     with torch.no_grad():
-                        response = await client.chat(model='Vikhr_Q3', messages=payload['messages'])
+                        timeout_duration = 60  # Установка таймаута в секундах
+                        response = await asyncio.wait_for(client.chat(model='Vikhr_Q3', messages=payload['messages']), timeout=timeout_duration)
                     if response and 'message' in response and 'content' in response['message']:
                         label = response['message']['content']
                     else:
                         label = "bad_request"
+                except asyncio.TimeoutError:
+                    label = "Таймаут выполнения"
+                    await redis_db.hincrby(f"task:{task_data['task_id']}", "timeout", 1)  # Увеличиваем счетчик таймаутов
                 except Exception as e:
                     label = "bad_request"
                     await redis_db.hincrby(f"task:{task_data['task_id']}", "bad_request", 1)
+            
             count = len(unique_texts_dict[text])
             return text, count, label
 
@@ -301,6 +428,7 @@ async def run_llm_query(task_data: dict):
             if new_count_since_save > 0:
                 await save_labels()
 
+        # Запускаем основную задачу
         await main()
 
         # print(texts[:10])
@@ -316,6 +444,8 @@ async def run_llm_query(task_data: dict):
 
         print('Текстов в llm_labels: {}'.format(len(llm_labels)))
 
+        llm_labels = clean_texts(llm_labels)
+        llm_labels = [re.sub(r"[^\w\s\"«»']", "", label.strip().capitalize()) for label in llm_labels if label.strip()]
         pd.DataFrame(zip(texts, llm_labels)).to_excel('/home/dev/fastapi/analytics_app/files/Llm_labels_texts_2.xlsx', 
                                                       index=False)
 
@@ -327,9 +457,6 @@ async def run_llm_query(task_data: dict):
         seconds = total_seconds % 60
         execution_llm_time = f"{hours} ч. {minutes} мин. {seconds} сек."
         print('Execution LLM time:', execution_llm_time)
-
-
-        llm_labels = [re.sub(r"[^\w\s\"«»']", "", label.strip()) for label in llm_labels if label.strip()]
 
         gc.collect()
         torch.cuda.empty_cache()
@@ -370,7 +497,7 @@ async def run_llm_query(task_data: dict):
             # Преобразование списка эмбеддингов в массив NumPy
             embeddings = np.array(embeddings)
 
-            umap_model = UMAP(n_neighbors=2, n_components=min(len(embeddings), 5), min_dist=0.0, metric="cosine", random_state=42)
+            umap_model = UMAP(n_neighbors=20, n_components=min(len(embeddings), 2), min_dist=0.0, metric="cosine", random_state=42)
             embeddings_umap = umap_model.fit_transform(embeddings)
 
             # Обновляем статус после завершения обработки эмбеддингов
@@ -378,7 +505,9 @@ async def run_llm_query(task_data: dict):
         else:
             print("Нет доступных эмбеддингов для обработки.")
 
-        hdbscan_model = HDBSCAN(min_cluster_size=15, metric="euclidean", cluster_selection_method="eom", prediction_data=True)
+        print(f'embeddings_umap.shape[0]: {embeddings_umap.shape[0]}')
+
+        hdbscan_model = HDBSCAN(min_cluster_size=5, metric="euclidean", cluster_selection_method="eom", prediction_data=True)
         hdbscan_model.fit(embeddings_umap)
 
         labels = hdbscan_model.labels_
@@ -387,7 +516,9 @@ async def run_llm_query(task_data: dict):
         num_noise_points = counts[np.where(unique_labels == -1)[0][0]] if -1 in unique_labels else 0
 
         # Используем преобразованные эмбеддинги для topic_model
-        topic_model = BERTopic(embedding_model=embedding_model, verbose=True)
+        representation_model = MaximalMarginalRelevance(diversity=0.8)
+
+        topic_model = BERTopic(embedding_model=embedding_model, verbose=True, representation_model=representation_model)
         topics, probs = topic_model.fit_transform(llm_labels, embeddings)  # Теперь `embeddings` - это NumPy массив
 
         async def generate_topic_label(client, key_words):
@@ -412,42 +543,77 @@ async def run_llm_query(task_data: dict):
 
         topic_labels_llama3 = []
         for i, topic in enumerate(topic_model.get_topics().values()):
-            key_words = " | ".join(token[0] for token in topic[:10])
+            key_words = " | ".join(token[0] for token in topic[:14])
             label = await generate_topic_label(client, key_words)
             if label:
                 topic_labels_llama3.append(label)
-        
 
-        topic_labels_llama3 = clean_texts(topic_labels_llama3)
-        # for i, label in enumerate(topic_labels_llama3):
-        #     print(f"Тема {i}: {label}")
+        for i, label in enumerate(topic_labels_llama3):
+            print(f"Тема {i}: {label}")
 
         def shorten_by_words(text, max_words):
             words = text.split()
             if len(words) > max_words:
                 return ' '.join(words[:max_words]) + '...'
-            return text
+            return text        
 
-        topic_labels_llama3 = [shorten_by_words(topic, 9) for topic in topic_labels_llama3]
+
+        topic_labels_llama3 = clean_texts(topic_labels_llama3)
+        # topic_labels_llama3 = [topic.capitalize() for topic in topic_labels_llama3]
+        topic_labels_llama3 = [shorten_by_words(topic, 10).capitalize() for topic in topic_labels_llama3]
         topic_model.set_topic_labels(topic_labels_llama3)
-
-        fig = topic_model.visualize_documents(llm_labels, reduced_embeddings=embeddings_umap, hide_annotations=True, 
-                                        hide_document_hover=False, custom_labels=True, title='Документы и темы')
         
-
+        ###################### save html visualize_documents ########################
+        fig = topic_model.visualize_documents(llm_labels, reduced_embeddings=embeddings_umap, hide_annotations=True, 
+                                        hide_document_hover=False, custom_labels=True, title='Документы и тематики')
+        
         file_location = f'/home/dev/fastapi/analytics_app/data/{task_data["user_id"]}/bertopic_files_directory/{task_data["folder_name"]}/'
         os.makedirs(os.path.dirname(file_location), exist_ok=True)
         os.chdir(file_location)
         fig.write_html(file_location + new_filename)
 
-        filename = 'topic_model_' + new_filename.split('.html')[0]
+        ###################### save html datamapplot ########################
+        # Проверка на наличие достаточного количества точек данных
+        if len(embeddings_umap) > 3:  # Минимум 4 точки для построения симплекса
+            try:
+                plot = datamapplot.create_interactive_plot(
+                    embeddings_umap,
+                    llm_labels,
+                    font_family="Playfair Display SC",
+                    hover_text=urls,
+                    # title=f"{indexes[int(task_data['index'])]}",
+                    on_click="window.open(`{hover_text}`)",
+                    # enable_search=True,
+                    # cluster_boundary_polygons=True,
+                    # cluster_boundary_line_width=5,
+                )
+            except ValueError as e:
+                print(f"Ошибка при построении графика: {str(e)}")
+                plot = None
+        else:
+            print("Недостаточно точек данных для построения графика.")
+            plot = None
 
+        if plot:
+            file_location = f'/home/dev/fastapi/analytics_app/data/{task_data["user_id"]}/bertopic_files_directory/{task_data["folder_name"]}/'
+            os.makedirs(os.path.dirname(file_location), exist_ok=True)
+            os.chdir(file_location)
+            filename = f'datamapplot_{new_filename}'
+            plot.save(filename)
+        else:
+            print("Не удалось построить график.")
+
+
+        filename = 'topic_model_' + new_filename.split('.html')[0]
 
         ###################### save topics over time ########################
         timestamps = [x['timeCreate'] for x in data][:maxdata]
-        topics_over_time = topic_model.topics_over_time(llm_labels[:maxdata], timestamps, datetime_format="%b%M", nr_bins=20)
-        topics_over_time_viz = topic_model.visualize_topics_over_time(topics_over_time, top_n_topics=20, title='Тематики во времени', 
-                                                                      height=550, custom_labels=True)
+        formatted_dates = [datetime.fromtimestamp(ts).strftime('%Y-%m-%d %H:%M:%S') for ts in timestamps]
+        
+        topics_over_time = topic_model.topics_over_time(llm_labels[:maxdata], formatted_dates, nr_bins=20)
+        topics_over_time_viz = visualize_topics_over_time(topic_model, topics_over_time, top_n_topics=20, title='Тематики во времени', 
+                                                                      width=1250, height=550, custom_labels=True)
+                
         topic_over_time_filename = f"{indexes[int(task_data['index'])]}_topic_over_time_{current_time}.html"
         # topics_over_time_viz.save(file_location + topic_over_time_filename)
         topics_over_time_viz.write_html(file_location + topic_over_time_filename)
@@ -455,7 +621,7 @@ async def run_llm_query(task_data: dict):
         elapsed_time = time.time() - et
         total_seconds = int(elapsed_time)
 
-        hours = total_seconds // 3600 
+        hours = total_seconds // 3600
         minutes = (total_seconds % 3600) // 60
         seconds = total_seconds % 60
         execution_all_time = f"{hours} ч. {minutes} мин. {seconds} сек."
@@ -467,6 +633,25 @@ async def run_llm_query(task_data: dict):
             print(f"Модель успешно сохранена в: {file_location }")
         except Exception as e:
             print(f"Ошибка при сохранении модели: {e}")
+
+
+        ###################################### save topic labels #################################
+        # Путь для сохранения файла (используем абсолютный путь, избегая изменения CWD)
+        file_location = f'/home/dev/fastapi/analytics_app/data/{task_data["user_id"]}/bertopic_files_directory/{task_data["folder_name"]}/'
+        os.makedirs(file_location, exist_ok=True)
+        topic_model = BERTopic.load(filename)
+        # print(df_topic.columns)
+        # print(df_topic[['Topic', 'Count', 'Representative_Docs']])
+        df_topic = topic_model.get_topic_info()[['Topic', 'CustomName']]
+        dct_df_topic = dict(zip(df_topic['Topic'], df_topic['CustomName']))
+        # Замена меток на текстовые названия
+        text_labels = [dct_df_topic[label] for label in topics]
+        # Имя файла 
+        file_name = f'topic_names_{indexes[int(task_data["index"])]}_{current_time}.pkl'
+        file_full_path = os.path.join(file_location, file_name)
+        
+        with open(file_full_path, 'wb') as file:
+            pickle.dump(text_labels, file)
 
 
         user_data = await redis_db.execute_command('HGETALL', task_data['user_id'])
@@ -516,7 +701,8 @@ async def run_llm_query(task_data: dict):
 
         await redis_db.hset(f"task:{task_data['task_id']}", mapping={
             "final_status": "done",
-            "html-file": f"{indexes[int(task_data['index'])]}_{current_time}.html"
+            "html-file": f"{indexes[int(task_data['index'])]}_{current_time}.html",
+            "folder_name": task_data['folder_name']
         })
 
         await reset_gpu_status()
